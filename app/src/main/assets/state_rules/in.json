@@ -1,0 +1,60 @@
+{
+  "indiana": {
+    "legal_max_ft": { 
+      "height": 13.5, 
+      "width": 8.5, 
+      "length_trailer": 53 
+    },
+    "annual_permit_max_ft": { 
+      "height": 13.5, 
+      "width": 12.333, 
+      "length_combined": 110 
+    },
+    "single_trip": {
+      "allows_over_height": true,
+      "escort_rules": [
+        { "if": "height > 14.5", "require": ["front_escort_height_pole"] },
+        { "if": "width > 12", "require": ["rear_escort"] },
+        { "if": "width > 14", "require": ["front_and_rear_escort"] },
+        { "if": "length > 100", "require": ["rear_escort"] }
+      ],
+      "max_dimensions_ft": {
+        "height": 15.0,
+        "width": 16.0,
+        "length_combined": 150.0,
+        "weight_lbs": 200000
+      },
+      "restrictions": [
+        "Pre-approved route required",
+        "No weekend travel",
+        "Daylight hours only"
+      ]
+    },
+    "time_restrictions": [
+      {
+        "type": "rush_hour",
+        "days": ["MON", "TUE", "WED", "THU", "FRI"],
+        "start_time": "07:00",
+        "end_time": "09:00",
+        "applies_to": ["annual"]
+      },
+      {
+        "type": "rush_hour", 
+        "days": ["MON", "TUE", "WED", "THU", "FRI"],
+        "start_time": "16:00",
+        "end_time": "18:00",
+        "applies_to": ["annual"]
+      },
+      {
+        "type": "weekend_ban",
+        "days": ["SAT", "SUN"],
+        "applies_to": ["single_trip"]
+      }
+    ],
+    "route_restrictions": [
+      "No travel on I-465 during rush hours",
+      "Bridge clearance minimum 14.5 feet required",
+      "Weight limits strictly enforced on county roads"
+    ]
+  }
+}

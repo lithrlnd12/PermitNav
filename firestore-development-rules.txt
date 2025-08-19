@@ -1,0 +1,29 @@
+// Development Firestore Security Rules
+// Use these rules during development, then switch to production rules when deploying
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Allow authenticated users to read/write permits
+    match /permits/{permitId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Public read for state rules (PDFs metadata)
+    match /rules/{state} {
+      allow read: if true;
+      allow write: if false;
+    }
+    
+    // Health check endpoint - public access
+    match /_health/{document=**} {
+      allow read, write: if true;
+    }
+    
+    // Allow authenticated users for other collections during development
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

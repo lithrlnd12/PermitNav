@@ -30,7 +30,7 @@ fun PermitReviewScreen(
     onNavigateToNavigation: () -> Unit
 ) {
     val context = LocalContext.current
-    val viewModel = remember { PermitReviewViewModel(context) }
+    val viewModel = remember { PermitReviewViewModel(context.applicationContext as android.app.Application) }
     val uiState by viewModel.uiState.collectAsState()
     
     // Process the image when screen loads

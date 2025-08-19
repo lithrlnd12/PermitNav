@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import com.permitnav.R
 import com.permitnav.ui.theme.PrimaryOrange
 import com.permitnav.ui.theme.SecondaryBlue
+import com.permitnav.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
 
 @Composable
@@ -44,62 +45,44 @@ fun SplashScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        PrimaryOrange,
-                        SecondaryBlue
-                    )
-                )
-            ),
+            .background(SecondaryBlue), // Dark Navy Blue background to match logo exactly
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .alpha(alphaAnim.value)
         ) {
+            // Smaller top spacer to move logo higher
+            Spacer(modifier = Modifier.weight(0.6f))
+            
+            // Logo takes up most of the screen to show perfectly
             Image(
-                painter = painterResource(id = R.drawable.permitnav_logo),
-                contentDescription = "PermitNav Logo",
+                painter = painterResource(id = R.drawable.clearway_cargo_logo),
+                contentDescription = "Clearway Cargo Logo with tagline",
                 modifier = Modifier
-                    .size(200.dp)
-                    .padding(16.dp),
+                    .fillMaxWidth(0.95f) // Use 95% of screen width (bigger as requested)
+                    .aspectRatio(1f), // Keep square aspect ratio
                 contentScale = ContentScale.Fit
             )
             
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            Text(
-                text = "PermitNav",
-                style = MaterialTheme.typography.displayMedium.copy(
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold
-                ),
-                textAlign = TextAlign.Center
-            )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            Text(
-                text = "Safe & Legal Truck Routing",
-                style = MaterialTheme.typography.titleLarge.copy(
-                    color = Color.White.copy(alpha = 0.9f)
-                ),
-                textAlign = TextAlign.Center
-            )
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            Text(
-                text = "Powered by HERE Maps",
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    color = Color.White.copy(alpha = 0.7f)
-                ),
-                textAlign = TextAlign.Center
-            )
+            // Larger bottom spacer to balance the layout
+            Column(
+                modifier = Modifier.weight(1.4f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Text(
+                    text = "Powered by HERE Maps & AI",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = TextSecondary.copy(alpha = 0.7f)
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(bottom = 32.dp)
+                )
+            }
         }
     }
 }

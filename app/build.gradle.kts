@@ -8,6 +8,7 @@ plugins {
     id("kotlin-parcelize")
     id("com.google.devtools.ksp")
     id("org.jetbrains.kotlin.plugin.serialization")
+    id("com.google.gms.google-services")  // Google Services plugin for Firebase
 }
 
 // Load HERE SDK credentials
@@ -17,12 +18,28 @@ if (credentialsPropertiesFile.exists()) {
     credentialsProperties.load(FileInputStream(credentialsPropertiesFile))
 }
 
+// Load local properties (including OpenAI key)
+val localPropertiesFile = rootProject.file("local.properties")
+val localProperties = Properties()
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+
 android {
     namespace = "com.permitnav"
     compileSdk = 34
+    
+    signingConfigs {
+        create("release") {
+            storeFile = file("../clearway-cargo-release.keystore")
+            storePassword = "your-password-here"  // Replace with your actual password
+            keyAlias = "clearway-cargo"
+            keyPassword = "your-password-here"  // Replace with your actual password
+        }
+    }
 
     defaultConfig {
-        applicationId = "com.permitnav"
+        applicationId = "com.permitnav.app"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -37,6 +54,12 @@ android {
         // Legacy HERE API credentials from local.properties (for REST API)
         buildConfigField("String", "HERE_API_KEY", "\"${project.findProperty("HERE_API_KEY")}\"")
         buildConfigField("String", "HERE_APP_ID", "\"${project.findProperty("HERE_APP_ID")}\"")
+        
+        // Google Maps API key
+        buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"AIzaSyA02yK-n9cJIl883_5Oj97klT--SRg3en0\"")
+        
+        // OpenAI API key for intelligent permit parsing (from local.properties)
+        buildConfigField("String", "OPENAI_API_KEY", "\"${localProperties.getProperty("OPENAI_API_KEY") ?: ""}\"" )
     }
 
     buildTypes {
@@ -46,6 +69,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     
@@ -80,7 +104,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     
-    val composeBom = platform("androidx.compose:compose-bom:2023.10.01")
+    val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
@@ -120,8 +144,23 @@ dependencies {
     implementation("com.google.accompanist:accompanist-permissions:0.32.0")
     
     implementation("com.google.android.gms:play-services-location:21.0.1")
+    implementation("com.google.android.gms:play-services-maps:18.2.0")
+    implementation("com.google.maps.android:maps-compose:2.15.0")
     
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("org.json:json:20230618")
+    
+    // Firebase BOM - manages all Firebase library versions
+    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
+    
+    // Firebase libraries (versions managed by BOM)
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-storage")
+    implementation("com.google.firebase:firebase-analytics") // Optional but recommended
+    
+    // Google Sign-In
+    implementation("com.google.android.gms:play-services-auth:20.7.0")
     
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")

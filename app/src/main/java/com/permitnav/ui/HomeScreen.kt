@@ -27,11 +27,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.permitnav.data.models.Permit
 import com.permitnav.ui.theme.*
+import com.permitnav.ui.viewmodels.AuthViewModel
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -40,15 +42,22 @@ import java.util.*
 @Composable
 fun HomeScreen(
     onNavigateToPermitReview: (String, String?) -> Unit,
+    onNavigateToMultiCapture: () -> Unit,
     onNavigateToVault: () -> Unit,
-    onNavigateToNavigation: (String) -> Unit
+    onNavigateToNavigation: (String) -> Unit,
+    onNavigateToChat: () -> Unit = {},
+    onNavigateToAuth: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
     var imageUri by remember { mutableStateOf<Uri?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
+    var showCaptureOptions by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
     val recentPermits = remember { mutableStateListOf<Permit>() }
+    val authViewModel: AuthViewModel = viewModel()
     
+    // Single photo launcher (legacy - kept for quick single page permits)
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
@@ -56,7 +65,6 @@ fun HomeScreen(
         if (success) {
             imageUri?.let { uri ->
                 android.util.Log.d("HomeScreen", "Navigating to permit review with URI: $uri")
-                // Store the image URI in the saved state and navigate
                 val permitId = "new_${System.currentTimeMillis()}"
                 onNavigateToPermitReview(permitId, uri.toString())
             }
@@ -65,6 +73,7 @@ fun HomeScreen(
         }
     }
     
+    // Gallery launcher for single image (legacy)
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -74,12 +83,24 @@ fun HomeScreen(
         }
     }
     
+    // Multi-image gallery launcher (new)
+    val multiGalleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10)
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val permitId = "new_${System.currentTimeMillis()}"
+            // Convert multiple URIs to comma-separated string for navigation
+            val urisString = uris.joinToString(",") { it.toString() }
+            onNavigateToPermitReview(permitId, urisString)
+        }
+    }
+    
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Text(
-                        "PermitNav",
+                        "Clearway Cargo",
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -95,7 +116,7 @@ fun HomeScreen(
                             tint = Color.White
                         )
                     }
-                    IconButton(onClick = { /* Settings */ }) {
+                    IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(
                             Icons.Default.Settings,
                             contentDescription = "Settings",
@@ -125,7 +146,7 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .background(BackgroundLight)
+                .background(SecondaryBlue)
         ) {
             QuickActions(
                 onScanPermit = { showBottomSheet = true },
@@ -134,7 +155,13 @@ fun HomeScreen(
                         onNavigateToNavigation(recentPermits.first().id)
                     }
                 },
-                onViewVault = onNavigateToVault
+                onViewVault = onNavigateToVault,
+                onOpenChat = onNavigateToChat,
+                onResumeRoute = {
+                    if (recentPermits.isNotEmpty()) {
+                        onNavigateToNavigation(recentPermits.first().id)
+                    }
+                }
             )
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -156,11 +183,121 @@ fun HomeScreen(
                     .padding(16.dp)
             ) {
                 Text(
-                    "Choose Image Source",
+                    "Add Permit Photos",
                     style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
                 )
                 
+                Text(
+                    "Choose one of these two simple options:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(bottom = 32.dp)
+                )
+                
+                // Option 1: Take Picture(s) - handles camera workflow
+                Card(
+                    onClick = {
+                        showBottomSheet = false
+                        onNavigateToMultiCapture()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = SuccessGreen.copy(alpha = 0.1f)),
+                    border = BorderStroke(2.dp, SuccessGreen)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(SuccessGreen),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.PhotoCamera,
+                                contentDescription = "Take pictures",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(20.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Take Picture(s)",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = SuccessGreen
+                            )
+                            Text(
+                                "Use your camera to capture permit pages",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
+                
+                // Multi-select from gallery (NEW)
+                Card(
+                    onClick = {
+                        multiGalleryLauncher.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                        showBottomSheet = false
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = SecondaryBlue.copy(alpha = 0.1f))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(SecondaryBlue),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Collections,
+                                contentDescription = "Multi-select",
+                                tint = Color.White,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Upload from Gallery",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = SecondaryBlue
+                            )
+                            Text(
+                                "Choose existing photos from your device",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
+                
+                // Single photo capture (Legacy)
                 Card(
                     onClick = {
                         if (cameraPermissionState.status.isGranted) {
@@ -181,30 +318,29 @@ fun HomeScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 4.dp),
                     colors = CardDefaults.cardColors(containerColor = SurfaceLight)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             Icons.Default.CameraAlt,
                             contentDescription = "Camera",
                             tint = PrimaryOrange,
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(16.dp))
+                        Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(
-                                "Take Photo",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Medium
+                                "Quick Photo",
+                                style = MaterialTheme.typography.bodyLarge
                             )
                             Text(
-                                "Use camera to capture permit",
+                                "Single page permits only",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextSecondary
                             )
@@ -212,6 +348,7 @@ fun HomeScreen(
                     }
                 }
                 
+                // Single image from gallery
                 Card(
                     onClick = {
                         galleryLauncher.launch("image/*")
@@ -219,13 +356,13 @@ fun HomeScreen(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 8.dp),
+                        .padding(vertical = 4.dp),
                     colors = CardDefaults.cardColors(containerColor = SurfaceLight)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -254,13 +391,64 @@ fun HomeScreen(
             }
         }
     }
+    
+    // Settings Dialog
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = {
+                Text(
+                    "Settings",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        "App Version: 1.0.0",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "Would you like to sign out of your account?",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        authViewModel.signOut()
+                        showSettingsDialog = false
+                        onNavigateToAuth()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ErrorRed
+                    )
+                ) {
+                    Text("Sign Out", color = Color.White)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showSettingsDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 fun QuickActions(
     onScanPermit: () -> Unit,
     onPlanRoute: () -> Unit,
-    onViewVault: () -> Unit
+    onViewVault: () -> Unit,
+    onOpenChat: () -> Unit,
+    onResumeRoute: () -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -279,6 +467,7 @@ fun QuickActions(
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             
+            // First row - main actions
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -301,6 +490,78 @@ fun QuickActions(
                     color = AccentGreen,
                     onClick = onViewVault
                 )
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // Second row - Resume Route and AI Assistant
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Resume Route button
+                Card(
+                    onClick = onResumeRoute,
+                    modifier = Modifier.weight(1f),
+                    colors = CardDefaults.cardColors(
+                        containerColor = SuccessGreen.copy(alpha = 0.1f)
+                    ),
+                    border = BorderStroke(1.dp, SuccessGreen)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Navigation,
+                            contentDescription = null,
+                            tint = SuccessGreen,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Resume Route",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = SuccessGreen,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                
+                // AI Assistant button
+                Card(
+                    onClick = onOpenChat,
+                    modifier = Modifier.weight(1f),
+                    colors = CardDefaults.cardColors(
+                        containerColor = SecondaryBlue.copy(alpha = 0.1f)
+                    ),
+                    border = BorderStroke(1.dp, SecondaryBlue)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            Icons.Default.SmartToy,
+                            contentDescription = null,
+                            tint = SecondaryBlue,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "AI Assistant",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = SecondaryBlue,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
         }
     }

@@ -1,0 +1,36 @@
+// Production Firebase Storage Security Rules
+// Replace the test rules with these when deploying to production
+
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Allow Cloud Functions to read state PDF rules (public read for compliance data)
+    match /state_rules/{fileName} {
+      allow read: if true;
+      allow write: if false;
+    }
+    
+    match /permits/{driverId}/{permitId}/{fileName} {
+      allow read, write: if request.auth != null && 
+                          request.auth.uid == driverId;
+      
+      allow create: if request.auth != null && 
+                     request.auth.uid == driverId &&
+                     request.resource.size < 10 * 1024 * 1024;
+      
+      allow delete: if request.auth != null && 
+                     request.auth.uid == driverId;
+    }
+    
+    match /permits/{driverId}/{permitId} {
+      allow read, write: if request.auth != null && 
+                          request.auth.uid == driverId &&
+                          request.resource.size < 10 * 1024 * 1024;
+    }
+    
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -371,6 +371,8 @@ fun getSamplePermits(): List<Permit> {
             vehicleInfo = VehicleInfo(null, null, null, "ABC123", null, null),
             dimensions = TruckDimensions(95.0, 12.0, 14.5, 85000.0, 5, null, null),
             routeDescription = "I-65 North to US-31",
+            origin = "Indianapolis, IN",
+            destination = "Fort Wayne, IN",
             restrictions = listOf("Daylight hours only", "No Sunday travel"),
             rawImagePath = null,
             ocrText = null,

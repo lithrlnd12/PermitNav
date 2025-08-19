@@ -150,7 +150,7 @@ class HereRoutingService {
             origin = origin,
             destination = destination,
             distance = section.travelSummary.length / 1609.34,
-            duration = section.travelSummary.duration * 1000L,
+            duration = section.travelSummary.duration.toLong(), // HERE API returns duration in seconds
             polyline = section.polyline,
             turnByTurnInstructions = mapInstructions(section),
             restrictions = extractRestrictions(route),

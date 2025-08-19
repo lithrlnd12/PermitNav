@@ -18,14 +18,26 @@ data class Permit(
     val vehicleInfo: VehicleInfo,
     val dimensions: TruckDimensions,
     val routeDescription: String?,
+    val origin: String?,
+    val destination: String?,
     val restrictions: List<String>,
-    val rawImagePath: String?,
-    val ocrText: String?,
+    val rawImagePath: String?, // Deprecated - kept for backwards compatibility
+    val imagePaths: List<String> = emptyList(), // Multiple image paths
+    val ocrText: String?, // Combined OCR text from all pages
+    val ocrTexts: List<String> = emptyList(), // OCR text per page
+    val aiParsedData: String? = null, // JSON response from OpenAI parsing
     val isValid: Boolean = false,
     val validationErrors: List<String> = emptyList(),
+    val processingMethod: ProcessingMethod = ProcessingMethod.OCR_ONLY,
     val createdAt: Date = Date(),
     val lastModified: Date = Date()
 ) : Parcelable
+
+enum class ProcessingMethod {
+    OCR_ONLY,       // Google ML Kit only
+    AI_ENHANCED,    // ML Kit + OpenAI
+    MANUAL_ENTRY    // User entered manually
+}
 
 @Parcelize
 data class VehicleInfo(

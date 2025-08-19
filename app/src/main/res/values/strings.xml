@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">PermitNav</string>
+    <string name="app_name">Clearway Cargo</string>
     <string name="scan_permit">Scan Permit</string>
     <string name="navigation">Navigation</string>
     <string name="permit_vault">Permit Vault</string>
@@ -13,4 +13,7 @@
     <string name="route_calculated">Route calculated successfully</string>
     <string name="no_permits_found">No permits found</string>
     <string name="error_occurred">An error occurred</string>
+    
+    <!-- Google Sign-In Web Client ID (placeholder until configured) -->
+    <string name="default_web_client_id">627905446819-web-client-placeholder</string>
 </resources>

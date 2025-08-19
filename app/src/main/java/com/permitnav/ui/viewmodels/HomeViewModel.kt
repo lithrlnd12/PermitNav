@@ -1,7 +1,7 @@
 package com.permitnav.ui.viewmodels
 
-import android.content.Context
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.permitnav.data.database.PermitNavDatabase
 import com.permitnav.data.models.Permit
@@ -15,14 +15,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class HomeViewModel(
-    private val context: Context
-) : ViewModel() {
+    application: Application
+) : AndroidViewModel(application) {
     
-    private val database = PermitNavDatabase.getDatabase(context)
+    private val database = PermitNavDatabase.getDatabase(getApplication())
     private val permitRepository = PermitRepository(database.permitDao())
-    private val textRecognitionService = TextRecognitionService(context)
+    private val textRecognitionService = TextRecognitionService(getApplication())
     private val permitParser = PermitParser()
-    private val complianceEngine = ComplianceEngine(context)
+    private val complianceEngine = ComplianceEngine(getApplication())
     
     private val _uiState = MutableStateFlow(HomeUiState())
     val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()

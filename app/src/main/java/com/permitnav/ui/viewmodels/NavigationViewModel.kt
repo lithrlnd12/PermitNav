@@ -1,12 +1,12 @@
 package com.permitnav.ui.viewmodels
 
 import android.Manifest
-import android.content.Context
+import android.app.Application
 import android.content.pm.PackageManager
 import android.location.Location
 import android.os.Looper
 import androidx.core.app.ActivityCompat
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.gms.location.*
 import com.permitnav.data.database.PermitNavDatabase
@@ -22,15 +22,15 @@ import kotlinx.coroutines.launch
 import kotlin.math.*
 
 class NavigationViewModel(
-    private val context: Context
-) : ViewModel() {
+    application: Application
+) : AndroidViewModel(application) {
     
-    private val database = PermitNavDatabase.getDatabase(context)
+    private val database = PermitNavDatabase.getDatabase(getApplication())
     private val permitRepository = PermitRepository(database.permitDao())
     private val hereRoutingService = HereRoutingService()
     
     // GPS Location Services
-    private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+    private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(application)
     private var locationCallback: LocationCallback? = null
     private var currentInstructionIndex = 0
     
@@ -51,16 +51,40 @@ class NavigationViewModel(
                     return@launch
                 }
                 
-                // For demo purposes, use placeholder origin and destination
-                // In a real app, you'd get the current location and allow destination input
-                val origin = com.permitnav.data.models.Location(
-                    latitude = 39.7684, // Indianapolis
-                    longitude = -86.1581
-                )
-                val destination = com.permitnav.data.models.Location(
-                    latitude = 41.8781, // Chicago
-                    longitude = -87.6298
-                )
+                // Use permit origin and destination, geocode if needed
+                val origin = if (!permit.origin.isNullOrEmpty()) {
+                    // Try to geocode the permit origin
+                    val geocodedOrigin = hereRoutingService.geocodeAddress(permit.origin)
+                    geocodedOrigin ?: com.permitnav.data.models.Location(
+                        latitude = 37.9443, // Evansville, IN fallback
+                        longitude = -87.5558,
+                        name = permit.origin
+                    )
+                } else {
+                    // Fallback to Indianapolis if no origin in permit
+                    com.permitnav.data.models.Location(
+                        latitude = 39.7684,
+                        longitude = -86.1581,
+                        name = "Indianapolis, IN"
+                    )
+                }
+                
+                val destination = if (!permit.destination.isNullOrEmpty()) {
+                    // Try to geocode the permit destination
+                    val geocodedDest = hereRoutingService.geocodeAddress(permit.destination)
+                    geocodedDest ?: com.permitnav.data.models.Location(
+                        latitude = 41.0772, // Fort Wayne, IN fallback
+                        longitude = -85.1394,
+                        name = permit.destination
+                    )
+                } else {
+                    // Fallback to Chicago if no destination in permit
+                    com.permitnav.data.models.Location(
+                        latitude = 41.8781,
+                        longitude = -87.6298,
+                        name = "Chicago, IL"
+                    )
+                }
                 
                 android.util.Log.d("NavigationVM", "Calculating route for permit: ${permit.permitNumber}")
                 val route = hereRoutingService.calculateTruckRoute(origin, destination, permit)
@@ -130,7 +154,7 @@ class NavigationViewModel(
     
     private fun hasLocationPermission(): Boolean {
         return ActivityCompat.checkSelfPermission(
-            context,
+            getApplication(),
             Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
     }

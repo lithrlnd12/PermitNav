@@ -16,11 +16,11 @@ PermitNav is a mobile-first Android application that simplifies navigation, comp
 - **Automatic field detection** for permit numbers, dates, dimensions
 - **Multi-format support** with intelligent parsing
 
-### ✅ **Real-time Compliance**
-- **State-specific validation** against local regulations
-- **Dimension checking** (weight, height, width, length)
-- **Time restriction alerts** and escort requirements
-- **Route compliance verification**
+### ✅ **AI-Powered Compliance Chat**
+- **Smart permit analysis** using OpenAI and state regulation PDFs
+- **Interactive compliance checking** via AI chat assistant
+- **Real-time violation detection** and escort requirements
+- **State-specific guidance** with DOT contact information
 
 ### 🗺️ **Truck-Optimized Routing**
 - **HERE Maps integration** with truck-specific parameters
@@ -30,9 +30,10 @@ PermitNav is a mobile-first Android application that simplifies navigation, comp
 
 ### 📱 **Driver-Friendly Interface**
 - **Modern Material 3 design** with truck driver workflow
+- **AI Chat Assistant** for instant permit compliance answers
+- **Complete US coverage** with all 50 states + DC (51 jurisdictions)
 - **Offline permit storage** with secure local database
-- **Quick actions** for scan, route, and vault access
-- **Dark/light theme support**
+- **Quick actions** for scan, route, chat, and vault access
 
 ## 🚀 Quick Start
 
@@ -40,6 +41,8 @@ PermitNav is a mobile-first Android application that simplifies navigation, comp
 - **Android Studio** Hedgehog (2023.1.1) or later
 - **JDK 17** (Temurin recommended)
 - **Android SDK** with API 34 (Android 14)
+- **Firebase Account** with Storage and Firestore enabled
+- **OpenAI API Key** for AI chat functionality
 - **HERE Developer Account** with Base Plan ([Get yours here](https://developer.here.com))
 - **HERE SDK for Android** (Explore Edition) 4.23.3.0
 
@@ -81,21 +84,30 @@ PermitNav is a mobile-first Android application that simplifies navigation, comp
 ```
 app/
 ├── src/main/java/com/permitnav/
+│   ├── ai/                     # AI chat services
 │   ├── data/                   # Data layer
 │   │   ├── database/           # Room database
-│   │   ├── models/             # Data models
+│   │   ├── models/             # Data models & chat models
 │   │   └── repository/         # Repository pattern
+│   ├── firebase/               # Firebase integration
 │   ├── network/                # API integration
 │   ├── ocr/                    # ML Kit OCR + parsing
 │   ├── rules/                  # Compliance engine
 │   ├── services/               # Background services
 │   └── ui/                     # Compose UI
-│       ├── screens/            # Screen composables
+│       ├── screens/            # Screen composables (incl. ChatScreen)
 │       ├── theme/              # Material theming
 │       └── viewmodels/         # MVVM ViewModels
 ├── src/main/assets/
 │   └── state_rules/            # State regulation JSONs
 └── src/main/res/               # Android resources
+
+permitnav_backend/              # Node.js PDF processing backend
+├── state_rules/                # State permit rule PDFs (50 states + DC)
+├── firebase_bootstrap.mjs      # Firebase SDK setup
+├── upload_state_rules.mjs      # PDF uploader to Firebase Storage
+├── chat_worker.mjs             # AI compliance checker
+└── health_check.mjs            # Connection testing
 ```
 
 ## 🛠️ Technology Stack
@@ -105,6 +117,8 @@ app/
 | **UI Framework** | Jetpack Compose + Material 3 | Modern declarative UI |
 | **Architecture** | MVVM + Repository | Clean separation of concerns |
 | **Database** | Room + SQLite | Local permit storage |
+| **AI Backend** | OpenAI + Firebase | PDF analysis & chat |
+| **Cloud Storage** | Firebase Storage/Firestore | State rules & data sync |
 | **Networking** | Ktor HTTP Client | HERE API integration |
 | **OCR** | Google ML Kit | Text recognition |
 | **Navigation** | Navigation Compose | Screen routing |
@@ -118,14 +132,19 @@ app/
 📷 Camera Capture → 🔍 ML Kit OCR → 📝 Text Parsing → ✅ Validation → 💾 Storage
 ```
 
-### 2. Route Planning Flow
+### 2. AI Chat Compliance Flow
+```
+💬 User Question → 📄 Permit Context → 🔍 State PDF Lookup → 🤖 OpenAI Analysis → 📋 Compliance Report
+```
+
+### 3. Route Planning Flow
 ```
 📍 Destination Input → 🗺️ HERE Geocoding → 🚛 Truck Routing → 📱 Navigation UI
 ```
 
-### 3. Compliance Check Flow
+### 4. Backend PDF Processing
 ```
-📄 Permit Data → 📊 State Rules → ⚖️ Validation Engine → 📋 Results Display
+📁 State PDFs → ☁️ Firebase Storage → 🗃️ Firestore Index → 🔍 Chat Queries → 📖 PDF Text Extraction
 ```
 
 ## ⚙️ Configuration
@@ -181,13 +200,14 @@ Add new state regulations in `assets/state_rules/{state_code}.json`:
 ## 🚀 Roadmap
 
 ### Phase 1 - MVP ✅
-- [x] Indiana permit scanning and validation
-- [x] HERE Maps truck routing
-- [x] Basic compliance checking
-- [x] Permit vault management
+- [x] Android app with permit scanning and validation
+- [x] HERE Maps truck routing integration
+- [x] AI-powered chat compliance system
+- [x] Firebase backend with complete US coverage (50 states + DC)
+- [x] Multi-state permit rule processing
 
 ### Phase 2 - Enhanced Features 🚧
-- [ ] Multi-state expansion (Ohio, Illinois, Michigan)
+- [ ] Deploy chat backend as Cloud Function/API
 - [ ] Real-time road closures (INDOT 511 API)
 - [ ] Weather integration (NOAA API)
 - [ ] Truck parking availability

@@ -1,0 +1,45 @@
+// Production Firestore Security Rules
+// Replace the test rules with these when deploying to production
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions for validation
+    function isValidPermitData(data) {
+      return data.keys().hasAll(['driverId', 'state', 'status', 'createdAt']) &&
+             data.driverId is string &&
+             data.state is string &&
+             data.status in ['pending', 'validated', 'expired'] &&
+             data.createdAt == request.time;
+    }
+    
+    function isValidPermitUpdate(data) {
+      return data.diff(resource.data).affectedKeys().hasOnly(['status', 'lastModified']) &&
+             data.status in ['pending', 'validated', 'expired'] &&
+             data.lastModified == request.time;
+    }
+    
+    // Permits collection - only authenticated users can access their own permits
+    match /permits/{permitId} {
+      allow read, write: if request.auth != null && 
+                          request.auth.uid == resource.data.driverId;
+      
+      allow create: if request.auth != null && 
+                     request.auth.uid == request.resource.data.driverId &&
+                     isValidPermitData(request.resource.data);
+      
+      allow update: if request.auth != null && 
+                     request.auth.uid == resource.data.driverId &&
+                     isValidPermitUpdate(request.resource.data);
+      
+      allow delete: if request.auth != null && 
+                     request.auth.uid == resource.data.driverId;
+    }
+    
+    // Block all other document access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

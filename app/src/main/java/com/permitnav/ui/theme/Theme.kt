@@ -57,7 +57,7 @@ private val LightColorScheme = lightColorScheme(
 )
 
 @Composable
-fun PermitNavTheme(
+fun ClearwayCargoTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit

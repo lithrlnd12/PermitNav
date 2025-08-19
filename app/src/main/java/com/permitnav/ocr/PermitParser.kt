@@ -28,6 +28,8 @@ class PermitParser {
             vehicleInfo = extractVehicleInfo(fields),
             dimensions = extractDimensions(fields),
             routeDescription = fields["route"],
+            origin = fields["origin"],
+            destination = fields["destination"],
             restrictions = extractRestrictions(cleanedText),
             rawImagePath = null,
             ocrText = text,
@@ -102,6 +104,18 @@ class PermitParser {
         val unitPattern = Regex("(?:Unit\\s*#?:?|Unit\\s*Number:?)\\s*([A-Z0-9-]+)", RegexOption.IGNORE_CASE)
         unitPattern.find(text)?.let {
             fields["unitNumber"] = it.groupValues[1]
+        }
+        
+        // Extract origin from "Origin: City, State" pattern
+        val originPattern = Regex("(?:Origin:?)\\s*([^\\n\\r]+?)(?:\\s*Destination|\\s*Route|$)", RegexOption.IGNORE_CASE)
+        originPattern.find(text)?.let {
+            fields["origin"] = it.groupValues[1].trim()
+        }
+        
+        // Extract destination from "Destination: City, State" pattern  
+        val destinationPattern = Regex("(?:Destination:?)\\s*([^\\n\\r]+?)(?:\\s*Route|\\s*RESTRICTIONS|$)", RegexOption.IGNORE_CASE)
+        destinationPattern.find(text)?.let {
+            fields["destination"] = it.groupValues[1].trim()
         }
         
         return fields

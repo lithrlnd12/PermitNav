@@ -1,138 +1,71 @@
-- add to memory always refer to this PRD unless instucted otherwise  Overview
+Project Identity
 
-PermitNav is a mobile-first application (Android first, iOS-ready) for truck drivers to simplify navigation, compliance, and trip planning based on state-specific oversize/overweight (OSOW) permits.
+App name: Clearway Cargo (formerly PermitNav).
 
-Drivers can:
+Mission: Mobile-first app for truck drivers and dispatchers to simplify oversize/overweight (OSOW) permit compliance, routing, and trip planning.
 
-Snap a photo of their permit → OCR extracts key info.
+Current Focus (MVP Phase)
 
-Get compliant routing → Based on HERE truck routing & state rules.
+Dispatcher Task Automation is the active build priority.
 
-Access driver-friendly tools → parking, weather, amenities, etc.
+Drivers already have OCR permit scanning + HERE truck routing.
 
-2. Goals
+Now adding dispatcher workflows:
 
-Provide safe & legal routing based on truck attributes and state-issued permits.
+Capture loads (manual entry or scraped boards).
 
-Replace manual interpretation of permits with automated compliance checks.
+Trigger tasks: permit validation, route planning, driver notification.
 
-Offer an all-in-one tool for navigation, rest, parking, fuel, and road condition awareness.
+Separate roles: drivers in the field, dispatchers in the office.
 
-Build MVP in Indiana → scale nationally.
+Tech Stack
 
-3. Target Users
+Frontend: Android (Kotlin), with Firebase Auth & Firestore.
 
-Truck Drivers (owner-operators, fleet drivers).
+Backend: Firebase Cloud Functions (Node/TS).
 
-Dispatchers (support drivers, validate compliance).
+Automation: n8n orchestrates workflows.
 
-Fleet Managers (monitor efficiency, safety, and compliance).
+APIs: HERE Routing (truck attributes), Google ML Kit OCR.
 
-4. Core Features (MVP)
+Storage: Firebase Storage for permits, /assets/state_rules/ JSON for regulations.
 
-Permit Scanning
+Data Model (current scope)
 
-Take a picture of Indiana permit.
+users (role = driver | dispatcher).
 
-OCR extracts dimensions, weight, allowed roads, dates.
+trucks (attrs: height, weight, axle count, hazmat).
 
-Validate against state rules stored in JSON.
+permits (OCR + validation status).
 
-Truck-Compliant Routing
+loads (origin/destination, dims/weight, status).
 
-HERE Routing API with truck attributes (height, weight, hazardous, axle count).
+tasks (type: verify_permit, route_plan, bid_load, notify, etc.).
 
-Overlay state restrictions from local rule JSON.
+routePlans (HERE routing results linked to loads).
 
-Navigation UI
+Core Functions for Automation
 
-Google Maps–style interface with turn-by-turn navigation.
+createLoad → add a load, spawn tasks.
 
-Route recalculation if driver deviates.
+planRoute → request truck-compliant route via HERE.
 
-5. Extended Features (Future)
+validatePermit → check OCR'd permit against state JSON rules.
 
-Real-time road closures (INDOT 511, later nationwide).
+createTask → create generic dispatcher tasks.
 
-Weather & hazard alerts (NOAA / OWM).
+n8n or a phone/voice agent should connect via HTTP requests to these endpoints.
 
-Truck parking availability (INDOT API, later multi-state).
+Style for Instructions
 
-Fuel price comparison & truck stop amenities.
+Prefer short, copy-pasteable blocks (code, JSON, rules).
 
-Toll cost estimates (HERE Toll API).
+Explanations = step-by-step.
 
-Fleet dashboard (manager portal).
+If missing info, ask a clear follow-up.
 
-6. API Roadmap
-✅ Phase 1 – MVP (Free / On-Device)
+Avoid drifting into long-term features unless explicitly asked.
 
-HERE Routing API (truck routing).
+Reference
 
-Google ML Kit OCR (on-device permit scanning).
-
-Local JSON Rule Files (/assets/state_rules/indiana.json).
-
-🚛 Phase 2 – Contextual Data (Free)
-
-NOAA / NWS API (weather).
-
-INDOT 511 API (road closures).
-
-INDOT Parking API (truck parking availability).
-
-FMCSA Safer API (carrier safety lookups).
-
-⛽ Phase 3 – Driver Value Features (Freemium)
-
-OpenWeatherMap (global weather fallback).
-
-Google Places API (fuel, rest stops, amenities).
-
-EIA.gov (fuel averages).
-
-GasBuddy API (fuel prices – partner access).
-
-HERE Toll Costs API (paid).
-
-🌎 Phase 4 – National Expansion (Paid / Scraping)
-
-Multi-state DOT permit feeds (partnerships/scraping).
-
-Commercial data providers (ProMiles, KeepTruckin).
-
-Crowdsourced driver inputs (ratings, parking, weigh stations).
-
-7. Tech Stack
-
-Frontend: Android (Kotlin, XML) → later iOS (Swift).
-
-Backend: Firebase (Auth, Firestore, Cloud Functions).
-
-AI/OCR: Google ML Kit OCR (on-device).
-
-Maps/Routing: HERE SDK (REST APIs + Android SDK).
-
-Storage: Firebase Storage (permit images, rule JSON).
-
-8. Success Metrics
-
-MVP adoption: # of drivers creating compliant routes.
-
-Compliance: Reduction in permit violations.
-
-Engagement: Daily active users, session length.
-
-Expansion readiness: # of APIs integrated per state.
-
-9. Risks & Mitigations
-
-Data availability: Most states lack public permit APIs → solve with JSON/manual rules early.
-
-Cost creep: Limit API calls (batch, cache routes).
-
-Adoption barrier: Start with Indiana where APIs exist.
-
-Legal liability: Include disclaimers (drivers remain responsible for compliance).
-
-👉 This PRD is now Claude Code–ready: you can paste it as context, and then prompt Claude to scaffold the project (frontend skeleton, Firebase setup, HERE API integration, local JSON rules).
+For the full long-term vision (fuel, parking, weather, fleet dashboards, national scaling), see docs/PRD.md in the repo.

@@ -1,0 +1,43 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Permit images - drivers can manage their own, dispatchers/service can manage any
+    match /permits/{driverId}/{permitId}/{fileName} {
+      allow read, write: if request.auth != null && (
+        request.auth.uid == driverId || 
+        request.auth.token.role == 'dispatcher'
+      );
+    }
+    
+    // State rules JSON files - read for all authenticated, write for dispatchers/service
+    match /state_rules/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.role == 'dispatcher';
+    }
+    
+    // State PDFs - read for all authenticated, write for dispatchers/service
+    match /state_pdfs/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.role == 'dispatcher';
+    }
+    
+    // Route plans and documents
+    match /route_plans/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.role == 'dispatcher';
+    }
+    
+    // Truck documents and photos
+    match /trucks/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.role == 'dispatcher';
+    }
+    
+    // General app assets
+    match /app_assets/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.role == 'dispatcher';
+    }
+  }
+}

@@ -52,14 +52,14 @@ fun HomeScreen(
     onNavigateToNavigation: (String) -> Unit,
     onNavigateToChat: (String?) -> Unit = {},
     onNavigateToVoiceChat: (String?) -> Unit = {},
-    onNavigateToAuth: () -> Unit = {}
+    onNavigateToAuth: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
     var imageUri by remember { mutableStateOf<Uri?>(null) }
     var showBottomSheet by remember { mutableStateOf(false) }
     var showCaptureOptions by remember { mutableStateOf(false) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
     var showPermitDialog by remember { mutableStateOf(false) }
     var selectedPermit by remember { mutableStateOf<Permit?>(null) }
     val recentPermits = remember { mutableStateListOf<Permit>() }
@@ -135,7 +135,7 @@ fun HomeScreen(
                             tint = Color.White
                         )
                     }
-                    IconButton(onClick = { showSettingsDialog = true }) {
+                    IconButton(onClick = onNavigateToSettings) {
                         Icon(
                             Icons.Default.Settings,
                             contentDescription = "Settings",
@@ -544,73 +544,6 @@ fun HomeScreen(
                     }
                 ) {
                     Text("Cancel", color = SecondaryBlue)
-                }
-            }
-        )
-    }
-    
-    // Settings Dialog
-    if (showSettingsDialog) {
-        AlertDialog(
-            onDismissRequest = { showSettingsDialog = false },
-            title = {
-                Text(
-                    "Settings",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Column {
-                    Text(
-                        "App Version: 1.0.0",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // Cleanup button for testing
-                    Button(
-                        onClick = {
-                            homeViewModel.deleteAllTestPermits()
-                            showSettingsDialog = false
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = WarningYellow
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Clear All Test Permits", color = Color.Black)
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "Would you like to sign out of your account?",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        authViewModel.signOut()
-                        showSettingsDialog = false
-                        onNavigateToAuth()
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = ErrorRed
-                    )
-                ) {
-                    Text("Sign Out", color = Color.White)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showSettingsDialog = false }
-                ) {
-                    Text("Cancel")
                 }
             }
         )

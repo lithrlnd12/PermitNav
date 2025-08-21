@@ -1,23 +1,27 @@
-# 🚛 PermitNav
+# 🚛 Clearway Cargo
 
-**Smart permit validation and truck routing for commercial drivers**
+**Mobile-first platform for truck drivers and dispatchers to simplify oversize/overweight permit compliance, routing, and fleet management.**
 
 [![Android](https://img.shields.io/badge/Platform-Android-green.svg)](https://android.com)
 [![Kotlin](https://img.shields.io/badge/Language-Kotlin-blue.svg)](https://kotlinlang.org)
 [![Compose](https://img.shields.io/badge/UI-Jetpack%20Compose-orange.svg)](https://developer.android.com/jetpack/compose)
+[![Firebase](https://img.shields.io/badge/Backend-Firebase-yellow.svg)](https://firebase.google.com)
 [![HERE Maps](https://img.shields.io/badge/Maps-HERE%20API-purple.svg)](https://developer.here.com)
 
-PermitNav is a mobile-first Android application that simplifies navigation, compliance, and trip planning for truck drivers using state-specific oversize/overweight (OSOW) permits.
+Clearway Cargo (formerly PermitNav) is a comprehensive platform that revolutionizes how trucking companies handle OSOW permits, combining AI-powered scanning, truck-compliant routing, and dispatcher automation for reduced violations and streamlined operations.
 
 ## 🎯 Features
 
-### 📸 **Smart Permit Scanning**
-- **OCR-powered extraction** using Google ML Kit
-- **Automatic field detection** for permit numbers, dates, dimensions
-- **Multi-format support** with intelligent parsing
+### 👨‍💼 **For Dispatchers (NEW)**
+- **🔄 Role-Based Access**: Switch between driver/dispatcher views for testing
+- **📋 Load Management**: Create and assign loads with automated task generation  
+- **⚡ Task Automation**: Route planning, permit validation, driver notifications
+- **🔗 N8N Integration**: Ready for load board scraping and workflow automation
+- **☁️ Cloud Functions**: `setUserRole`, `createLoad`, `planRoute`, `validatePermit`
 
-### ✅ **AI-Powered Compliance Chat**
-- **Smart permit analysis** using OpenAI and state regulation PDFs
+### 🚛 **For Drivers**
+- **📸 OCR Permit Scanning**: Google ML Kit with intelligent field detection
+- **✅ AI Compliance Chat**: OpenAI-powered analysis with state regulation PDFs
 - **Interactive compliance checking** via AI chat assistant
 - **Real-time violation detection** and escort requirements
 - **State-specific guidance** with DOT contact information

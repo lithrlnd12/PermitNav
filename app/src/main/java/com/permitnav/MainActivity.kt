@@ -30,6 +30,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
 import com.permitnav.ui.screens.*
+import com.permitnav.ui.settings.SettingsScreen
 import com.permitnav.ui.theme.ClearwayCargoTheme
 import com.permitnav.ui.viewmodels.AuthViewModel
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -491,6 +492,9 @@ fun MainNavigation(startDestination: String? = null) {
                     navController.navigate("auth") {
                         popUpTo("home") { inclusive = true }
                     }
+                },
+                onNavigateToSettings = {
+                    navController.navigate("settings")
                 }
             )
         }
@@ -609,6 +613,12 @@ fun MainNavigation(startDestination: String? = null) {
                 onCancel = {
                     navController.popBackStack()
                 }
+            )
+        }
+        
+        composable("settings") {
+            SettingsScreen(
+                onNavigateBack = { navController.popBackStack() }
             )
         }
     }

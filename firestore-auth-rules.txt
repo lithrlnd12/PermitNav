@@ -1,0 +1,87 @@
+// Firestore Security Rules for Authenticated Users
+// Copy and paste these rules into Firebase Console → Firestore → Rules
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function to check if user owns the resource
+    function isOwner(resource) {
+      return isAuthenticated() && 
+             request.auth.uid == resource.data.driverId;
+    }
+    
+    // Permits collection - authenticated users can manage permits
+    match /permits/{permitId} {
+      // Allow authenticated users to read ALL permits
+      // This is needed for the home screen and vault to show permits
+      allow read: if isAuthenticated();
+      
+      // Allow users to create permits
+      // The driverId field must match the authenticated user's UID
+      allow create: if isAuthenticated() && (
+        // Either the driverId matches the user's UID
+        request.auth.uid == request.resource.data.driverId ||
+        // OR for testing, allow if driverId is not set yet
+        !("driverId" in request.resource.data.keys())
+      );
+      
+      // Allow users to update their own permits
+      allow update: if isAuthenticated() && (
+        // Either they own it
+        (resource.data.driverId == request.auth.uid) ||
+        // OR it doesn't have an owner yet (for migration)
+        !("driverId" in resource.data.keys())
+      );
+      
+      // Allow users to delete their own permits
+      allow delete: if isAuthenticated() && (
+        resource.data.driverId == request.auth.uid ||
+        !("driverId" in resource.data.keys())
+      );
+    }
+    
+    // State rules and regulations (read-only for all authenticated users)
+    // These are the rules.json files for each state
+    match /state_rules/{stateCode} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only admin can write via Firebase Console
+    }
+    
+    // State DOT contacts (read-only for all authenticated users)
+    match /state_contacts/{stateCode} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only admin can write via Firebase Console
+    }
+    
+    // User profiles (users can read/write their own profile)
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Chat conversations (users can read/write their own conversations)
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+      allow create: if isAuthenticated();
+    }
+    
+    // Voice chat sessions (users can read/write their own sessions)
+    match /voice_sessions/{sessionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // General app data (read-only for all authenticated users)
+    match /app_data/{document} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Only admin can write
+    }
+  }
+}

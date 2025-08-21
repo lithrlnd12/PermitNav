@@ -1,0 +1,287 @@
+{
+  "name": "Clearway Cargo - Dispatcher MVP Flow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 200]
+    },
+    {
+      "parameters": {
+        "functionName": "createLoad",
+        "parametersValues": {
+          "origin": {
+            "lat": 39.7684,
+            "lng": -86.1581,
+            "address": "Indianapolis, IN"
+          },
+          "destination": {
+            "lat": 39.1653,
+            "lng": -86.5264,
+            "address": "Bloomington, IN"
+          },
+          "pickupWindow": "2025-08-22T08:00:00Z",
+          "deliveryWindow": "2025-08-22T12:00:00Z",
+          "dims": {
+            "h": 4.1,
+            "w": 2.6,
+            "l": 18.0
+          },
+          "weight": 38000,
+          "special": ["oversized"]
+        }
+      },
+      "id": "create-load",
+      "name": "Firebase → createLoad",
+      "type": "n8n-nodes-base.googleFirebaseRealtimeDatabase",
+      "typeVersion": 1,
+      "position": [450, 200],
+      "credentials": {
+        "googleFirebaseRealtimeDatabaseOAuth2Api": "YOUR_FIREBASE_CREDENTIALS"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "collection": "tasks",
+        "filters": {
+          "conditions": [
+            {
+              "field": "type",
+              "operation": "equal",
+              "value": "route_plan"
+            },
+            {
+              "field": "status", 
+              "operation": "equal",
+              "value": "open"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "query-tasks",
+      "name": "Firestore → Query Open Tasks",
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1,
+      "position": [700, 200],
+      "credentials": {
+        "googleFirebaseCloudFirestoreOAuth2Api": "YOUR_FIREBASE_CREDENTIALS"
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data"
+      },
+      "id": "split-tasks",
+      "name": "Split Tasks",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 1,
+      "position": [950, 200]
+    },
+    {
+      "parameters": {
+        "functionName": "planRoute",
+        "parametersValues": {
+          "loadId": "={{ $json.loadId }}"
+        }
+      },
+      "id": "plan-route",
+      "name": "Firebase → planRoute",
+      "type": "n8n-nodes-base.googleFirebaseRealtimeDatabase",
+      "typeVersion": 1,
+      "position": [1200, 200],
+      "credentials": {
+        "googleFirebaseRealtimeDatabaseOAuth2Api": "YOUR_FIREBASE_CREDENTIALS"
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.permitId }}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "check-permit",
+      "name": "Check if Permit Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "functionName": "validatePermit",
+        "parametersValues": {
+          "permitId": "={{ $json.permitId }}"
+        }
+      },
+      "id": "validate-permit",
+      "name": "Firebase → validatePermit",
+      "type": "n8n-nodes-base.googleFirebaseRealtimeDatabase",
+      "typeVersion": 1,
+      "position": [1700, 120],
+      "credentials": {
+        "googleFirebaseRealtimeDatabaseOAuth2Api": "YOUR_FIREBASE_CREDENTIALS"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "collection": "tasks",
+        "documentId": "={{ $json.id }}",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "completed"
+            },
+            {
+              "fieldId": "completedAt",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "id": "complete-task",
+      "name": "Firestore → Complete Task",
+      "type": "n8n-nodes-base.googleFirebaseCloudFirestore",
+      "typeVersion": 1,
+      "position": [1700, 280],
+      "credentials": {
+        "googleFirebaseCloudFirestoreOAuth2Api": "YOUR_FIREBASE_CREDENTIALS"
+      }
+    },
+    {
+      "parameters": {
+        "message": "Load {{ $json.loadId }} has been processed successfully. Route planned and task completed.",
+        "additionalFields": {
+          "threadTs": "={{ $json.timestamp }}"
+        }
+      },
+      "id": "notify-completion",
+      "name": "Notify Completion",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1950, 200],
+      "credentials": {
+        "slackOAuth2Api": "YOUR_SLACK_CREDENTIALS"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Firebase → createLoad",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firebase → createLoad": {
+      "main": [
+        [
+          {
+            "node": "Firestore → Query Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firestore → Query Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Split Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Tasks": {
+      "main": [
+        [
+          {
+            "node": "Firebase → planRoute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firebase → planRoute": {
+      "main": [
+        [
+          {
+            "node": "Check if Permit Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Permit Exists": {
+      "main": [
+        [
+          {
+            "node": "Firebase → validatePermit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Firestore → Complete Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firebase → validatePermit": {
+      "main": [
+        [
+          {
+            "node": "Firestore → Complete Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firestore → Complete Task": {
+      "main": [
+        [
+          {
+            "node": "Notify Completion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "createdAt": "2025-08-21T00:00:00.000Z",
+  "updatedAt": "2025-08-21T00:00:00.000Z",
+  "settings": {},
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2025-08-21T00:00:00.000Z",
+      "updatedAt": "2025-08-21T00:00:00.000Z",
+      "id": "clearway-cargo",
+      "name": "Clearway Cargo"
+    }
+  ]
+}

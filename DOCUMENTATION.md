@@ -1,10 +1,11 @@
-# PermitNav Developer Documentation
+# Clearway Cargo Developer Documentation
 
 ## 📋 Table of Contents
 - [Project Overview](#project-overview)
 - [Development Progress](#development-progress)
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
+- [Dispatcher Automation System](#dispatcher-automation-system)
 - [Core Components](#core-components)
 - [Data Flow](#data-flow)
 - [API Integration](#api-integration)
@@ -16,17 +17,29 @@
 
 ## 🎯 Project Overview
 
-PermitNav is an Android application designed for truck drivers to simplify navigation, compliance, and trip planning based on state-specific oversize/overweight (OSOW) permits. The app uses OCR to extract permit information, validates against state regulations, and provides truck-compliant routing.
+**Clearway Cargo** (formerly PermitNav) is a mobile-first platform for truck drivers and dispatchers to simplify navigation, compliance, and trip planning for oversize/overweight (OSOW) permits. The app features OCR permit scanning, AI-powered compliance validation, truck-specific routing, and dispatcher task automation workflows.
 
-### Key Features
+### Driver Features
 - **Permit Scanning**: OCR-powered permit text extraction using Google ML Kit ✅ **IMPLEMENTED**
 - **AI Chat Compliance**: OpenAI-powered chat assistant with state regulation PDFs ✅ **IMPLEMENTED**
 - **Multi-State Support**: 42 states with PDF knowledge base uploaded to Firebase ✅ **IMPLEMENTED**
 - **Truck Routing**: HERE Maps integration with truck-specific restrictions ✅ **IMPLEMENTED**
 - **Permit Management**: Smart permit selection with stored permit access ✅ **IMPLEMENTED**
+- **Voice Chat with AI Dispatch**: Natural voice conversations using OpenAI Realtime API ✅ **IMPLEMENTED**
+- **Turn-by-Turn Navigation**: Miles-based navigation with voice guidance ✅ **IMPLEMENTED**
+
+### Dispatcher Features (NEW)
+- **Role-Based Access Control**: Driver/Dispatcher role switching with Firebase custom claims ✅ **IMPLEMENTED**
+- **Load Management**: Create and assign loads to drivers with automated task generation ✅ **IMPLEMENTED**
+- **Automated Route Planning**: HERE API integration for truck-compliant routing ✅ **IMPLEMENTED**
+- **Task Automation**: Permit validation, route planning, and driver notification workflows ✅ **IMPLEMENTED**
+- **Cloud Functions**: `setUserRole`, `createLoad`, `planRoute`, `validatePermit` endpoints ✅ **IMPLEMENTED**
+- **N8N Integration**: Ready for workflow automation and load board scraping ✅ **IMPLEMENTED**
+
+### Platform Features
 - **ClearwayCargo Branding**: Complete rebrand with professional color scheme ✅ **IMPLEMENTED**
 - **User Authentication**: Firebase Auth with secure logout functionality ✅ **IMPLEMENTED**
-- **Voice Chat with AI Dispatch**: Natural voice conversations using OpenAI Realtime API ✅ **IMPLEMENTED**
+- **Firestore Security**: Role-based data access rules for drivers/dispatchers ✅ **IMPLEMENTED**
 
 ## 🚀 Development Progress
 
@@ -187,12 +200,70 @@ PermitNav follows **MVVM (Model-View-ViewModel)** architecture with Android Jetp
 
 ### Core Technologies
 - **UI**: Jetpack Compose + Material 3
-- **Database**: Room with SQLite
+- **Database**: Firestore (Cloud) + Room (Local Cache)
 - **Networking**: Ktor HTTP client  
 - **OCR**: Google ML Kit Text Recognition
 - **Maps**: HERE Routing API
 - **Background Work**: WorkManager
 - **State Management**: StateFlow + ViewModel
+- **Backend**: Firebase Cloud Functions (Node.js)
+- **Automation**: N8N workflows for dispatcher tasks
+
+## 🚛 Dispatcher Automation System
+
+### Overview
+The dispatcher automation system transforms Clearway Cargo from a driver-only app into a comprehensive fleet management platform. Dispatchers can manage loads, automate route planning, and coordinate with drivers through a centralized task system.
+
+### Key Components
+
+#### Firebase Cloud Functions
+1. **`setUserRole`**: Assigns driver/dispatcher roles with Firebase custom claims
+2. **`createLoad`**: Creates loads and automatically spawns route planning tasks
+3. **`planRoute`**: Integrates with HERE API for truck-compliant routing
+4. **`validatePermit`**: Validates permits against state regulations (extensible)
+
+#### Data Model
+- **`loads`**: Origin/destination, dimensions, weight, assigned drivers
+- **`tasks`**: Route planning, permit validation, driver notifications  
+- **`routePlans`**: HERE API responses with truck-specific routes
+- **`users`**: Role management and permissions
+
+#### Role-Based Security
+- **Drivers**: Access their own tasks and assigned loads
+- **Dispatchers**: Full access to all loads, tasks, and fleet management
+- **Service Accounts**: Automation-friendly permissions for n8n workflows
+
+#### N8N Integration
+Ready-to-import workflow for:
+1. Load creation (manual or automated)
+2. Route planning automation
+3. Permit validation workflows
+4. Driver notifications
+5. Task completion tracking
+
+### Deployment Architecture
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Android App   │    │  Firebase Cloud  │    │   N8N Server    │
+│                 │    │    Functions     │    │                 │
+│ • Driver View   │◄──►│ • setUserRole    │◄──►│ • Load Scraping │
+│ • Dispatcher    │    │ • createLoad     │    │ • Route Tasks   │
+│ • Settings      │    │ • planRoute      │    │ • Notifications │
+│ • Role Switch   │    │ • validatePermit │    │ • Voice Alerts  │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                        │                        │
+         └────────────────────────┼────────────────────────┘
+                                  ▼
+                        ┌──────────────────┐
+                        │    Firestore     │
+                        │                  │
+                        │ • loads          │
+                        │ • tasks          │
+                        │ • users (roles)  │
+                        │ • permits        │
+                        │ • routePlans     │
+                        └──────────────────┘
+```
 
 ## 📁 Project Structure
 

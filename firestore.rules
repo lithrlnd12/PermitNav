@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getRole() {
+      return request.auth.token.role;
+    }
+    
+    function isDriver() {
+      return isAuthenticated() && getRole() == 'driver';
+    }
+    
+    function isDispatcher() {
+      return isAuthenticated() && getRole() == 'dispatcher';
+    }
+    
+    function isService() {
+      return isAuthenticated() && request.auth.token.service;
+    }
+    
+    // Users collection - role management
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (
+        isDispatcher() || 
+        request.auth.uid == userId
+      );
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    // Permits collection - authenticated users can manage permits
+    match /permits/{permitId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        request.auth.uid == request.resource.data.driverId ||
+        !("driverId" in request.resource.data.keys()) ||
+        isDispatcher() ||
+        isService()
+      );
+      allow update: if isAuthenticated() && (
+        (resource.data.driverId == request.auth.uid) ||
+        !("driverId" in resource.data.keys()) ||
+        isDispatcher() ||
+        isService()
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.driverId == request.auth.uid ||
+        !("driverId" in resource.data.keys()) ||
+        isDispatcher()
+      );
+    }
+    
+    // Loads collection - dispatcher workflow
+    match /loads/{loadId} {
+      allow read: if isDispatcher() || isService() || (
+        isDriver() && resource.data.assignedDriverUid == request.auth.uid
+      );
+      allow create, update: if isDispatcher() || isService();
+      allow delete: if isDispatcher();
+      
+      // Route plans subcollection
+      match /routePlans/{routePlanId} {
+        allow read: if isDispatcher() || isService() || (
+          isDriver() && get(/databases/$(database)/documents/loads/$(loadId)).data.assignedDriverUid == request.auth.uid
+        );
+        allow create, update: if isDispatcher() || isService();
+      }
+    }
+    
+    // Tasks collection - dispatcher and driver workflow
+    match /tasks/{taskId} {
+      allow read: if isDispatcher() || isService() || (
+        isDriver() && resource.data.driverUid == request.auth.uid
+      );
+      allow create: if isDispatcher() || isService();
+      allow update: if isDispatcher() || isService() || (
+        isDriver() && resource.data.driverUid == request.auth.uid
+      );
+      allow delete: if isDispatcher();
+    }
+    
+    // Trucks collection - fleet management
+    match /trucks/{truckId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isDispatcher() || isService();
+      allow delete: if isDispatcher();
+    }
+    
+    // State rules and regulations (read-only for all authenticated users)
+    match /state_rules/{stateCode} {
+      allow read: if isAuthenticated();
+      allow write: if isDispatcher() || isService();
+    }
+    
+    // State DOT contacts (read-only for all authenticated users)
+    match /state_contacts/{stateCode} {
+      allow read: if isAuthenticated();
+      allow write: if isDispatcher() || isService();
+    }
+    
+    // Chat conversations (users can read/write their own conversations)
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+      allow create: if isAuthenticated();
+    }
+    
+    // Voice chat sessions (users can read/write their own sessions)
+    match /voice_sessions/{sessionId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+    
+    // General app data (read-only for all authenticated users)
+    match /app_data/{document} {
+      allow read: if isAuthenticated();
+      allow write: if isDispatcher() || isService();
+    }
+  }
+}

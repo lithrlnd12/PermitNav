@@ -367,3 +367,246 @@ exports.pdfchat = functions
     memory: '1GB'
   })
   .https.onRequest(expressApp);
+
+// ==========================================================================================
+// NEW DISPATCHER AUTOMATION FUNCTIONS
+// ==========================================================================================
+
+/**
+ * setUserRole
+ * WHAT: Assign a user a role ("driver" or "dispatcher") as a custom claim + mirror in /users.
+ * WHY : Lets UI and security rules differentiate views & permissions.
+ * HOW : POST { uid, role } to this endpoint (lock behind IAM/API Gateway in prod).
+ */
+exports.setUserRole = functions.https.onCall(async (data, context) => {
+  try {
+    // Verify caller is authenticated and has appropriate permissions
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+
+    const { uid, role } = data;
+    
+    if (!uid || !['driver', 'dispatcher'].includes(role)) {
+      throw new functions.https.HttpsError(
+        'invalid-argument', 
+        'uid and role (driver/dispatcher) are required'
+      );
+    }
+
+    // Set custom claims
+    await admin.auth().setCustomUserClaims(uid, { role });
+    
+    // Mirror role in Firestore for easier queries
+    await db.collection('users').doc(uid).set({ role }, { merge: true });
+    
+    return { success: true, uid, role };
+  } catch (error) {
+    console.error('setUserRole error:', error);
+    throw new functions.https.HttpsError('internal', error.message);
+  }
+});
+
+/**
+ * createLoad
+ * WHAT: Create a Load and automatically create an open route_plan Task for dispatch.
+ * WHY : Dispatchers (or an automation) can drop in loads; system spawns next action.
+ * HOW : POST JSON body with origin, destination, dims, weight, optional assignedDriverUid.
+ */
+exports.createLoad = functions.https.onCall(async (data, context) => {
+  try {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+
+    const { 
+      origin, 
+      destination, 
+      pickupWindow, 
+      deliveryWindow, 
+      dims, 
+      weight, 
+      special, 
+      assignedDriverUid 
+    } = data;
+
+    if (!origin || !destination) {
+      throw new functions.https.HttpsError(
+        'invalid-argument', 
+        'origin and destination are required'
+      );
+    }
+
+    // Create the load
+    const loadRef = await db.collection('loads').add({
+      origin,
+      destination,
+      pickupWindow: pickupWindow || null,
+      deliveryWindow: deliveryWindow || null,
+      dims: dims || null,
+      weight: weight || null,
+      special: special || [],
+      assignedDriverUid: assignedDriverUid || null,
+      status: 'new',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdBy: context.auth.uid
+    });
+
+    // Automatically create a route planning task
+    await db.collection('tasks').add({
+      type: 'route_plan',
+      loadId: loadRef.id,
+      status: 'open',
+      driverUid: assignedDriverUid || null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdBy: context.auth.uid
+    });
+
+    return { success: true, loadId: loadRef.id };
+  } catch (error) {
+    console.error('createLoad error:', error);
+    throw new functions.https.HttpsError('internal', error.message);
+  }
+});
+
+/**
+ * planRoute
+ * WHAT: Calls HERE Truck Routing using Load + (basic) truck attrs; stores route; closes task.
+ * WHY : Automates route planning step for dispatcher.
+ * HOW : Call with { loadId }. Requires HERE_API_KEY in function config.
+ */
+exports.planRoute = functions.https.onCall(async (data, context) => {
+  try {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+
+    const { loadId } = data;
+    
+    if (!loadId) {
+      throw new functions.https.HttpsError('invalid-argument', 'loadId is required');
+    }
+
+    // Get the load
+    const loadDoc = await db.collection('loads').doc(loadId).get();
+    if (!loadDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Load not found');
+    }
+
+    const load = loadDoc.data();
+    
+    // Default truck attributes (can be enhanced to use actual truck data)
+    const truck = {
+      height: (load.dims?.h ?? 4.0),
+      width: (load.dims?.w ?? 2.6), 
+      length: (load.dims?.l ?? 18.0),
+      weight: (load.weight ?? 36000),
+      axleCount: 5,
+      hazmat: false
+    };
+
+    // Get HERE API key
+    const hereApiKey = functions.config().here?.api_key || process.env.HERE_API_KEY;
+    if (!hereApiKey) {
+      throw new functions.https.HttpsError('failed-precondition', 'HERE_API_KEY not configured');
+    }
+
+    // Build HERE API URL
+    const url = `https://router.hereapi.com/v8/routes?transportMode=truck` +
+      `&origin=${load.origin.lat},${load.origin.lng}` +
+      `&destination=${load.destination.lat},${load.destination.lng}` +
+      `&apiKey=${hereApiKey}` +
+      `&truck[height]=${truck.height}&truck[width]=${truck.width}&truck[length]=${truck.length}` +
+      `&truck[axleCount]=${truck.axleCount}&truck[weight]=${truck.weight}` +
+      `&return=polyline,summary,actions`;
+
+    // Call HERE API
+    const fetch = require('node-fetch');
+    const response = await fetch(url);
+    const routeData = await response.json();
+
+    if (!response.ok) {
+      throw new functions.https.HttpsError('internal', `HERE API error: ${routeData.error || 'Unknown error'}`);
+    }
+
+    // Store route plan
+    await db.collection('loads').doc(loadId).collection('routePlans').add({
+      provider: 'HERE',
+      routeData,
+      truck,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdBy: context.auth.uid
+    });
+
+    // Close open route_plan tasks for this load
+    const openTasks = await db.collection('tasks')
+      .where('loadId', '==', loadId)
+      .where('type', '==', 'route_plan')
+      .where('status', '==', 'open')
+      .get();
+
+    const batch = db.batch();
+    openTasks.docs.forEach(doc => {
+      batch.update(doc.ref, {
+        status: 'completed',
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        completedBy: context.auth.uid
+      });
+    });
+    await batch.commit();
+
+    return { success: true, routeData };
+  } catch (error) {
+    console.error('planRoute error:', error);
+    throw new functions.https.HttpsError('internal', error.message);
+  }
+});
+
+/**
+ * validatePermit (STUB)
+ * WHAT: Placeholder to mark permit validated/flagged; wire your analyzer + state_rules JSON later.
+ * WHY : Keeps the endpoint stable for n8n/agent now; you can swap internals anytime.
+ * HOW : Call with { permitId }.
+ */
+exports.validatePermit = functions.https.onCall(async (data, context) => {
+  try {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'User must be authenticated');
+    }
+
+    const { permitId } = data;
+    
+    if (!permitId) {
+      throw new functions.https.HttpsError('invalid-argument', 'permitId is required');
+    }
+
+    // Get the permit
+    const permitRef = db.collection('permits').doc(permitId);
+    const permitDoc = await permitRef.get();
+    
+    if (!permitDoc.exists) {
+      throw new functions.https.HttpsError('not-found', 'Permit not found');
+    }
+
+    // TODO: Integrate your chat_worker & state_rules validation
+    // For now, return a stub validation
+    const verdict = {
+      compliant: true,
+      notes: ['Automatic validation - placeholder implementation'],
+      validatedAt: new Date().toISOString(),
+      validatedBy: context.auth.uid
+    };
+
+    // Update permit with validation result
+    await permitRef.update({
+      status: verdict.compliant ? 'validated' : 'flagged',
+      verdict,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return { success: true, verdict };
+  } catch (error) {
+    console.error('validatePermit error:', error);
+    throw new functions.https.HttpsError('internal', error.message);
+  }
+});

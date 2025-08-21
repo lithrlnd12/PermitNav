@@ -13,10 +13,10 @@
     }
   ],
   "firestore": {
-    "rules": "firestore-development-rules.txt",
+    "rules": "firestore-auth-rules.txt",
     "indexes": "firestore.indexes.json"
   },
   "storage": {
-    "rules": "storage-production-rules.txt"
+    "rules": "storage.rules"
   }
 }

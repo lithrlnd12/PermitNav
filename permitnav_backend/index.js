@@ -61,6 +61,81 @@ expressApp.get('/api/states', (req, res) => {
 });
 
 /**
+ * Generate ephemeral token for OpenAI Realtime API
+ */
+expressApp.post('/api/realtime-token', async (req, res) => {
+  try {
+    console.log('🎤 Generating ephemeral token for Realtime API');
+    
+    // Create ephemeral token session
+    const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openai.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-realtime-preview',
+        voice: 'verse',
+        instructions: `You are Clearway Cargo's voice dispatcher assistant - a helpful AI that makes trucking easier.
+
+IMPORTANT: Always respond in English only. Never speak in French or any other language.
+
+Keep responses brief (1-3 sentences), conversational, and helpful.
+No markdown or emojis - just natural speech.
+You can help with permit questions, routing guidance, and general trucking advice.
+When discussing compliance, be specific but concise.
+If asked about compliance, use the state rules and regulations to provide accurate information.
+
+Speak clearly in American English with a neutral accent.`,
+        modalities: ['text', 'audio'],
+        temperature: 0.8,
+        max_response_output_tokens: 4096,
+        tools: [],
+        tool_choice: 'auto',
+        input_audio_format: 'pcm16',
+        output_audio_format: 'pcm16',
+        input_audio_transcription: {
+          model: 'whisper-1'
+        },
+        turn_detection: {
+          type: 'server_vad',
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 200
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      console.error('❌ OpenAI Realtime API error:', error);
+      return res.status(response.status).json({
+        error: 'Failed to create realtime session',
+        details: error
+      });
+    }
+
+    const sessionData = await response.json();
+    
+    console.log('✅ Ephemeral token generated successfully');
+    
+    res.json({
+      client_secret: sessionData.client_secret,
+      expires_at: sessionData.expires_at,
+      session_id: sessionData.id
+    });
+
+  } catch (error) {
+    console.error('❌ Error generating ephemeral token:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+/**
  * Main chat endpoint - PDF-powered compliance responses
  */
 expressApp.post('/api/chat', async (req, res) => {

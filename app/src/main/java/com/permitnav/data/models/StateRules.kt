@@ -1,6 +1,9 @@
 package com.permitnav.data.models
 
+import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.Serializable
+
+@OptIn(InternalSerializationApi::class)
 
 @Serializable
 data class StateRules(
@@ -15,6 +18,7 @@ data class StateRules(
     val escortRequirements: EscortRequirements
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class MaxDimensions(
     val maxWeight: Double,
@@ -27,6 +31,7 @@ data class MaxDimensions(
     val maxAxles: Int
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class PermitType(
     val code: String,
@@ -36,6 +41,7 @@ data class PermitType(
     val allowedDimensions: MaxDimensions
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class StateRestriction(
     val type: String,
@@ -44,6 +50,7 @@ data class StateRestriction(
     val value: String?
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class RouteRequirements(
     val requiresSpecificRoute: Boolean,
@@ -53,6 +60,7 @@ data class RouteRequirements(
     val bridgeRestrictions: List<BridgeRestriction>
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class BridgeRestriction(
     val bridgeId: String,
@@ -61,6 +69,7 @@ data class BridgeRestriction(
     val location: String
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class TimeRestriction(
     val description: String,
@@ -70,6 +79,7 @@ data class TimeRestriction(
     val applicableCondition: String?
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class EscortRequirements(
     val frontEscortRequired: EscortCondition,
@@ -77,6 +87,7 @@ data class EscortRequirements(
     val policeEscortRequired: EscortCondition
 )
 
+@OptIn(InternalSerializationApi::class)
 @Serializable
 data class EscortCondition(
     val required: Boolean,

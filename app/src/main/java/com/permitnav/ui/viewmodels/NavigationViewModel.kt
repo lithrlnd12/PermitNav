@@ -15,10 +15,18 @@ import com.permitnav.data.models.Route
 import com.permitnav.data.models.NavigationInstruction
 import com.permitnav.data.repository.PermitRepository
 import com.permitnav.network.HereRoutingService
+import com.permitnav.navigation.GuidanceEngine
+import com.permitnav.navigation.Announcer
+import com.permitnav.navigation.FlexiblePolylineDecoder
+import com.permitnav.navigation.RouteGeom
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.delay
 import kotlin.math.*
 
 class NavigationViewModel(
@@ -29,6 +37,11 @@ class NavigationViewModel(
     private val permitRepository = PermitRepository(database.permitDao())
     private val hereRoutingService = HereRoutingService()
     
+    // Navigation guidance components
+    private var guidanceEngine: GuidanceEngine? = null
+    private var announcer: Announcer? = null
+    private var routeGeometry: RouteGeom? = null
+    
     // GPS Location Services
     private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(application)
     private var locationCallback: LocationCallback? = null
@@ -37,7 +50,10 @@ class NavigationViewModel(
     private val _uiState = MutableStateFlow(NavigationUiState())
     val uiState: StateFlow<NavigationUiState> = _uiState.asStateFlow()
     
-    fun loadPermitAndCalculateRoute(permitId: String) {
+    // Current GPS location
+    private val _currentLocation = MutableStateFlow<Location?>(null)
+    
+    private fun loadPermitAndCalculateRouteWithAutoStart(permitId: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
             
@@ -51,21 +67,22 @@ class NavigationViewModel(
                     return@launch
                 }
                 
-                // Use permit origin and destination, geocode if needed
-                val origin = if (!permit.origin.isNullOrEmpty()) {
-                    // Try to geocode the permit origin
-                    val geocodedOrigin = hereRoutingService.geocodeAddress(permit.origin)
-                    geocodedOrigin ?: com.permitnav.data.models.Location(
-                        latitude = 37.9443, // Evansville, IN fallback
-                        longitude = -87.5558,
-                        name = permit.origin
+                // Wait for current GPS location first
+                val currentLoc = getCurrentLocationSuspend()
+                val origin = if (currentLoc != null) {
+                    android.util.Log.d("NavigationVM", "Using actual GPS location as origin: ${currentLoc.latitude}, ${currentLoc.longitude}")
+                    com.permitnav.data.models.Location(
+                        latitude = currentLoc.latitude,
+                        longitude = currentLoc.longitude,
+                        name = "Current Location"
                     )
                 } else {
-                    // Fallback to Indianapolis if no origin in permit
+                    // Fallback to Indianapolis if no GPS available
+                    android.util.Log.w("NavigationVM", "No GPS location available, using fallback")
                     com.permitnav.data.models.Location(
                         latitude = 39.7684,
                         longitude = -86.1581,
-                        name = "Indianapolis, IN"
+                        name = "Current Location"
                     )
                 }
                 
@@ -87,7 +104,112 @@ class NavigationViewModel(
                 }
                 
                 android.util.Log.d("NavigationVM", "Calculating route for permit: ${permit.permitNumber}")
-                val route = hereRoutingService.calculateTruckRoute(origin, destination, permit)
+                val routeWithActions = hereRoutingService.calculateTruckRoute(origin, destination, permit)
+                val route = routeWithActions.route
+                val rawActions = routeWithActions.rawActions
+                
+                android.util.Log.d("NavigationVM", "HERE API returned ${rawActions.size} raw actions")
+                
+                // Validate we have actions
+                if (rawActions.isEmpty()) {
+                    android.util.Log.e("NavigationVM", "No actions in HERE response - cannot build route geometry")
+                    throw Exception("No turn-by-turn actions received from HERE API")
+                }
+                
+                // Build route geometry using raw HERE actions with proper offsets
+                android.util.Log.d("NavigationVM", "Building RouteGeom with ${rawActions.size} raw HERE actions")
+                routeGeometry = FlexiblePolylineDecoder.buildRouteGeom(route.polyline, rawActions)
+                
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    permit = permit,
+                    route = route,
+                    currentInstruction = "Ready to start navigation",
+                    routeDistance = "${route.distance.toInt()} mi",
+                    routeDuration = formatDuration(route.duration.toInt()),
+                    activeRestrictions = permit.restrictions.size
+                )
+                
+                // Auto-start navigation after successful route calculation
+                android.util.Log.d("NavigationVM", "Route calculated successfully, auto-starting navigation")
+                startNavigation()
+                
+            } catch (e: Exception) {
+                android.util.Log.e("NavigationVM", "Error calculating route", e)
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = "Failed to calculate route: ${e.message}"
+                )
+            }
+        }
+    }
+
+    fun loadPermitAndCalculateRoute(permitId: String) {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+            
+            try {
+                val permit = permitRepository.getPermitById(permitId)
+                if (permit == null) {
+                    _uiState.value = _uiState.value.copy(
+                        isLoading = false,
+                        error = "Permit not found"
+                    )
+                    return@launch
+                }
+                
+                // Wait for current GPS location first
+                val currentLoc = getCurrentLocationSuspend()
+                val origin = if (currentLoc != null) {
+                    android.util.Log.d("NavigationVM", "Using actual GPS location as origin: ${currentLoc.latitude}, ${currentLoc.longitude}")
+                    com.permitnav.data.models.Location(
+                        latitude = currentLoc.latitude,
+                        longitude = currentLoc.longitude,
+                        name = "Current Location"
+                    )
+                } else {
+                    // Fallback to Indianapolis if no GPS available
+                    android.util.Log.w("NavigationVM", "No GPS location available, using fallback")
+                    com.permitnav.data.models.Location(
+                        latitude = 39.7684,
+                        longitude = -86.1581,
+                        name = "Current Location"
+                    )
+                }
+                
+                val destination = if (!permit.destination.isNullOrEmpty()) {
+                    // Try to geocode the permit destination
+                    val geocodedDest = hereRoutingService.geocodeAddress(permit.destination)
+                    geocodedDest ?: com.permitnav.data.models.Location(
+                        latitude = 41.0772, // Fort Wayne, IN fallback
+                        longitude = -85.1394,
+                        name = permit.destination
+                    )
+                } else {
+                    // Fallback to Chicago if no destination in permit
+                    com.permitnav.data.models.Location(
+                        latitude = 41.8781,
+                        longitude = -87.6298,
+                        name = "Chicago, IL"
+                    )
+                }
+                
+                android.util.Log.d("NavigationVM", "Calculating route for permit: ${permit.permitNumber}")
+                val routeWithActions = hereRoutingService.calculateTruckRoute(origin, destination, permit)
+                val route = routeWithActions.route
+                val rawActions = routeWithActions.rawActions
+                
+                android.util.Log.d("NavigationVM", "HERE API returned ${rawActions.size} raw actions")
+                
+                // Validate we have actions
+                if (rawActions.isEmpty()) {
+                    android.util.Log.e("NavigationVM", "No actions in HERE response - cannot build route geometry")
+                    throw Exception("No turn-by-turn actions received from HERE API")
+                }
+                
+                // Build route geometry using raw HERE actions with proper offsets
+                android.util.Log.d("NavigationVM", "Building RouteGeom with ${rawActions.size} raw HERE actions")
+                routeGeometry = FlexiblePolylineDecoder.buildRouteGeom(route.polyline, rawActions)
                 
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
@@ -117,28 +239,33 @@ class NavigationViewModel(
             return
         }
         
-        val route = _uiState.value.route
-        val instructions = route?.turnByTurnInstructions ?: emptyList()
-        
-        android.util.Log.d("NavigationVM", "Starting navigation with ${instructions.size} instructions")
-        instructions.take(3).forEachIndexed { index, instruction ->
-            android.util.Log.d("NavigationVM", "Instruction $index: ${instruction.instruction}")
+        val routeGeom = routeGeometry
+        if (routeGeom == null) {
+            _uiState.value = _uiState.value.copy(
+                error = "Route geometry not available"
+            )
+            return
         }
         
-        val firstInstruction = instructions.firstOrNull()?.instruction ?: "Follow the route"
-        val nextInstruction = instructions.getOrNull(1)?.instruction ?: "Continue following route"
+        // Initialize guidance engine
+        guidanceEngine = GuidanceEngine(routeGeom)
         
-        android.util.Log.d("NavigationVM", "Current: $firstInstruction")
-        android.util.Log.d("NavigationVM", "Next: $nextInstruction")
+        // Initialize announcer with neural TTS callback
+        announcer = Announcer { announcement ->
+            // TODO: Integrate with your neural TTS system
+            android.util.Log.d("NavigationVM", "TTS Announcement: $announcement")
+        }
+        
+        android.util.Log.d("NavigationVM", "Starting navigation with route geometry")
             
         _uiState.value = _uiState.value.copy(
             isNavigating = true,
-            currentInstruction = firstInstruction,
-            nextInstruction = "Next: $nextInstruction"
+            currentInstruction = "Starting navigation...",
+            nextInstruction = "GPS tracking active"
         )
         
         startLocationTracking()
-        android.util.Log.d("NavigationVM", "Navigation started with GPS tracking")
+        android.util.Log.d("NavigationVM", "Navigation started with guidance engine")
     }
     
     fun stopNavigation() {
@@ -151,6 +278,100 @@ class NavigationViewModel(
         
         android.util.Log.d("NavigationVM", "Navigation stopped")
     }
+    
+    fun updateDestination(destinationAddress: String) {
+        viewModelScope.launch {
+            try {
+                _uiState.value = _uiState.value.copy(isLoading = true)
+                
+                // Store the new destination address
+                _customDestination = destinationAddress
+                
+                // Update the permit with new destination and recalculate route
+                _uiState.value.permit?.let { permit ->
+                    val updatedPermit = permit.copy(
+                        destination = destinationAddress
+                    )
+                    _uiState.value = _uiState.value.copy(permit = updatedPermit)
+                    
+                    // Recalculate route with new destination and auto-start navigation
+                    loadPermitAndCalculateRouteWithAutoStart(permit.id)
+                }
+                
+            } catch (e: Exception) {
+                android.util.Log.e("NavigationVM", "Failed to update destination", e)
+                _uiState.value = _uiState.value.copy(
+                    isLoading = false,
+                    error = "Failed to update destination: ${e.message}"
+                )
+            }
+        }
+    }
+    
+    fun isDestinationValid(): Boolean {
+        val route = _uiState.value.route ?: return true
+        
+        // Check if destination coordinates are valid in the route
+        val dest = route.destination
+        
+        return dest.latitude != 0.0 && dest.longitude != 0.0 &&
+               dest.latitude >= -90 && dest.latitude <= 90 &&
+               dest.longitude >= -180 && dest.longitude <= 180
+    }
+    
+    fun resumeNavigation() {
+        // Resume navigation from current location but stay on the planned route
+        if (_uiState.value.route != null) {
+            android.util.Log.d("NavigationVM", "Resuming navigation from current location")
+            
+            // Find the nearest point on the route to current location
+            _currentLocation.value?.let { location ->
+                val nearestInstructionIndex = findNearestInstructionToLocation(location)
+                currentInstructionIndex = nearestInstructionIndex
+                
+                val instructions = _uiState.value.route?.turnByTurnInstructions ?: emptyList()
+                val currentInstruction = instructions.getOrNull(nearestInstructionIndex)?.instruction ?: "Continue on route"
+                val nextInstruction = instructions.getOrNull(nearestInstructionIndex + 1)?.instruction ?: "Continue following route"
+                
+                _uiState.value = _uiState.value.copy(
+                    isNavigating = true,
+                    currentInstruction = currentInstruction,
+                    nextInstruction = "Next: $nextInstruction"
+                )
+                
+                startLocationTracking()
+                android.util.Log.d("NavigationVM", "Navigation resumed from instruction #$nearestInstructionIndex")
+            } ?: run {
+                // No current location, start from beginning
+                startNavigation()
+            }
+        }
+    }
+    
+    private fun findNearestInstructionToLocation(location: Location): Int {
+        val instructions = _uiState.value.route?.turnByTurnInstructions ?: return 0
+        var nearestIndex = 0
+        var minDistance = Double.MAX_VALUE
+        
+        instructions.forEachIndexed { index, instruction ->
+            val distance = calculateDistance(
+                location.latitude,
+                location.longitude,
+                instruction.location.latitude,
+                instruction.location.longitude
+            )
+            
+            if (distance < minDistance) {
+                minDistance = distance
+                nearestIndex = index
+            }
+        }
+        
+        return nearestIndex
+    }
+    
+    // Store custom destination if user entered one
+    private var _customDestination: String? = null
     
     private fun hasLocationPermission(): Boolean {
         return ActivityCompat.checkSelfPermission(
@@ -195,30 +416,170 @@ class NavigationViewModel(
         locationCallback = null
     }
     
-    private fun updateNavigationWithLocation(location: Location) {
-        val route = _uiState.value.route ?: return
-        val instructions = route.turnByTurnInstructions
-        
-        if (instructions.isEmpty()) return
-        
-        // Find the closest instruction to current location
-        val newInstructionIndex = findClosestInstructionIndex(location, instructions)
-        
-        if (newInstructionIndex != currentInstructionIndex) {
-            currentInstructionIndex = newInstructionIndex
-            
-            val currentInstruction = instructions.getOrNull(currentInstructionIndex)?.instruction 
-                ?: "Continue following route"
-            val nextInstruction = instructions.getOrNull(currentInstructionIndex + 1)?.instruction
-                ?: "You will arrive at your destination"
-                
-            _uiState.value = _uiState.value.copy(
-                currentInstruction = currentInstruction,
-                nextInstruction = "Next: $nextInstruction"
-            )
-            
-            android.util.Log.d("NavigationVM", "Updated to instruction $currentInstructionIndex: $currentInstruction")
+    private suspend fun getCurrentLocation() {
+        if (!hasLocationPermission()) {
+            android.util.Log.w("NavigationVM", "No location permission")
+            return
         }
+        
+        try {
+            val locationTask = fusedLocationClient.lastLocation
+            locationTask.addOnSuccessListener { location ->
+                if (location != null) {
+                    android.util.Log.d("NavigationVM", "Got current location: ${location.latitude}, ${location.longitude}")
+                    _currentLocation.value = location
+                } else {
+                    android.util.Log.w("NavigationVM", "Location is null, requesting fresh location")
+                    // Request a fresh location if last known location is null
+                    requestFreshLocation()
+                }
+            }.addOnFailureListener { e ->
+                android.util.Log.e("NavigationVM", "Failed to get current location", e)
+            }
+        } catch (e: SecurityException) {
+            android.util.Log.e("NavigationVM", "Location permission denied", e)
+        }
+    }
+    
+    /**
+     * Suspend function that waits for GPS location
+     */
+    private suspend fun getCurrentLocationSuspend(): Location? {
+        if (!hasLocationPermission()) {
+            android.util.Log.w("NavigationVM", "No location permission")
+            return null
+        }
+        
+        return withContext(Dispatchers.IO) {
+            try {
+                // First try to get last known location
+                val lastLocation = fusedLocationClient.lastLocation.await()
+                if (lastLocation != null) {
+                    android.util.Log.d("NavigationVM", "Got last known location: ${lastLocation.latitude}, ${lastLocation.longitude}")
+                    _currentLocation.value = lastLocation
+                    return@withContext lastLocation
+                }
+                
+                // If no last known location, request fresh location
+                android.util.Log.d("NavigationVM", "No last known location, requesting fresh GPS fix...")
+                return@withContext requestFreshLocationSuspend()
+                
+            } catch (e: SecurityException) {
+                android.util.Log.e("NavigationVM", "Location permission denied", e)
+                return@withContext null
+            }
+        }
+    }
+    
+    /**
+     * Request fresh GPS location and wait for result
+     */
+    private suspend fun requestFreshLocationSuspend(): Location? {
+        return suspendCancellableCoroutine { continuation ->
+            if (!hasLocationPermission()) {
+                continuation.resume(null, onCancellation = null)
+                return@suspendCancellableCoroutine
+            }
+            
+            val locationRequest = LocationRequest.Builder(
+                Priority.PRIORITY_HIGH_ACCURACY, 1000L
+            ).apply {
+                setMaxUpdates(1) // Only get one location update
+            }.build()
+            
+            val oneTimeCallback = object : LocationCallback() {
+                override fun onLocationResult(locationResult: LocationResult) {
+                    locationResult.lastLocation?.let { location ->
+                        android.util.Log.d("NavigationVM", "Fresh GPS location obtained: ${location.latitude}, ${location.longitude}")
+                        _currentLocation.value = location
+                        if (continuation.isActive) {
+                            continuation.resume(location, onCancellation = null)
+                        }
+                    } ?: run {
+                        android.util.Log.w("NavigationVM", "Fresh location result was null")
+                        if (continuation.isActive) {
+                            continuation.resume(null, onCancellation = null)
+                        }
+                    }
+                    fusedLocationClient.removeLocationUpdates(this)
+                }
+            }
+            
+            try {
+                fusedLocationClient.requestLocationUpdates(
+                    locationRequest,
+                    oneTimeCallback,
+                    Looper.getMainLooper()
+                )
+                
+                // Set timeout for GPS acquisition
+                continuation.invokeOnCancellation {
+                    fusedLocationClient.removeLocationUpdates(oneTimeCallback)
+                }
+                
+            } catch (e: SecurityException) {
+                android.util.Log.e("NavigationVM", "Location permission denied for fresh location", e)
+                if (continuation.isActive) {
+                    continuation.resume(null, onCancellation = null)
+                }
+            }
+        }
+    }
+    
+    private fun requestFreshLocation() {
+        if (!hasLocationPermission()) return
+        
+        val locationRequest = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY, 1000L
+        ).apply {
+            setMaxUpdates(1) // Only get one location update
+        }.build()
+        
+        val oneTimeCallback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                locationResult.lastLocation?.let { location ->
+                    android.util.Log.d("NavigationVM", "Fresh location obtained: ${location.latitude}, ${location.longitude}")
+                    _currentLocation.value = location
+                }
+                fusedLocationClient.removeLocationUpdates(this)
+            }
+        }
+        
+        try {
+            fusedLocationClient.requestLocationUpdates(
+                locationRequest,
+                oneTimeCallback,
+                Looper.getMainLooper()
+            )
+        } catch (e: SecurityException) {
+            android.util.Log.e("NavigationVM", "Location permission denied for fresh location", e)
+        }
+    }
+    
+    private fun updateNavigationWithLocation(location: Location) {
+        val engine = guidanceEngine ?: return
+        val announcer = announcer ?: return
+        
+        // Process location through guidance engine
+        val tick = engine.onLocation(location)
+        
+        // Update announcements
+        announcer.onTick(tick)
+        
+        // Handle rerouting if needed
+        if (tick.shouldReroute) {
+            android.util.Log.w("NavigationVM", "Reroute needed - driver is off route")
+            // TODO: Trigger reroute through HERE API
+        }
+        
+        // Update UI with current guidance
+        val currentInstruction = tick.nextManeuver?.instruction ?: "Continue on route"
+        val distanceText = formatDistance(tick.distanceToManeuver)
+        
+        _uiState.value = _uiState.value.copy(
+            currentInstruction = "$currentInstruction${if (distanceText.isNotEmpty()) " in $distanceText" else ""}",
+            nextInstruction = "${(tick.remainingMeters * 3.28084 / 5280.0).format(1)} mi remaining"
+        )
     }
     
     private fun findClosestInstructionIndex(currentLocation: Location, instructions: List<NavigationInstruction>): Int {
@@ -271,6 +632,18 @@ class NavigationViewModel(
         super.onCleared()
         stopLocationTracking()
         hereRoutingService.close()
+    }
+    
+    // Helper extension function for formatting
+    private fun Double.format(digits: Int) = "%.${digits}f".format(this)
+    
+    private fun formatDistance(meters: Double): String {
+        val feet = meters * 3.28084
+        return when {
+            feet < 300 -> "${feet.toInt()} ft"
+            feet < 5280 -> "${(feet / 100).toInt() * 100} ft" 
+            else -> "${(feet / 5280.0).format(1)} mi"
+        }
     }
     
     private fun formatDuration(seconds: Int): String {

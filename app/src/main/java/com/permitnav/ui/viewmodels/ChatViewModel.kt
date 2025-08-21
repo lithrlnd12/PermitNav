@@ -8,6 +8,11 @@ import com.permitnav.ai.ChatService
 import com.permitnav.data.database.PermitNavDatabase
 import com.permitnav.data.models.*
 import com.permitnav.data.repository.PermitRepository
+import com.clearwaycargo.data.StateDataRepository
+import com.clearwaycargo.ai.ComplianceEngine
+import com.permitnav.ai.OpenAIService
+import com.clearwaycargo.ui.chat.Renderer
+import com.clearwaycargo.util.SafetyGate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +27,10 @@ class ChatViewModel(
     private val chatService = ChatService()
     private val database = PermitNavDatabase.getDatabase(getApplication())
     private val permitRepository = PermitRepository(database.permitDao())
+    
+    // New compliance flow services
+    private val openAIService = OpenAIService()
+    private val safetyGate = SafetyGate(getApplication())
     
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -113,34 +122,30 @@ class ChatViewModel(
                 Log.d(TAG, "🏛️ State context: $effectiveStateCode")
                 Log.d(TAG, "📋 Using permit: ${currentPermit?.permitNumber ?: "None"}")
                 
-                // Prepare chat request
-                val permitText = currentPermit?.let { chatService.formatPermitForChat(it) }
-                    ?: "No specific permit loaded. General inquiry about $effectiveStateCode regulations."
-                
-                val chatRequest = ChatRequest(
-                    stateKey = effectiveStateCode,
-                    permitText = permitText,
-                    userQuestion = message,
-                    conversationId = conversationId
-                )
-                
-                // Send to AI service
-                val result = chatService.sendChatMessage(chatRequest)
-                
-                if (result.isSuccess) {
-                    val response = result.getOrNull()!!
-                    Log.d(TAG, "🤖 AI response received. Compliant: ${response.is_compliant}")
+                // NEW: Check if this is a compliance question and we have a permit
+                if (currentPermit != null && isComplianceQuestion(message)) {
+                    Log.d(TAG, "🎯 Detected compliance question with permit - using new compliance flow")
                     
-                    // Format response message
-                    val responseContent = formatComplianceResponse(response)
+                    // Use the new compliance flow
+                    checkPermitComplianceForMessage(currentPermit!!)
+                } else if (isComplianceQuestion(message)) {
+                    Log.d(TAG, "🎯 Compliance question without permit - providing general guidance")
+                    
+                    // Compliance question but no permit loaded
+                    val summary = try {
+                        openAIService.generalChat("Question about $effectiveStateCode permit regulations: $message")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "General compliance chat failed", e)
+                        "For specific permit compliance questions, I need you to load a permit first. For general $effectiveStateCode regulations, please contact your state DOT office."
+                    }
                     
                     val aiMessage = ChatMessage(
                         id = UUID.randomUUID().toString(),
                         conversationId = conversationId,
-                        content = responseContent,
+                        content = summary,
                         isFromUser = false,
                         stateContext = effectiveStateCode,
-                        messageType = MessageType.COMPLIANCE_RESULT
+                        messageType = MessageType.TEXT
                     )
                     
                     _uiState.value = _uiState.value.copy(
@@ -148,8 +153,29 @@ class ChatViewModel(
                         isLoading = false
                     )
                 } else {
-                    Log.e(TAG, "❌ Chat service error: ${result.exceptionOrNull()}")
-                    handleChatError(result.exceptionOrNull())
+                    Log.d(TAG, "💬 General chat question - using OpenAI for general response")
+                    
+                    // For general questions (not compliance-related)
+                    val summary = try {
+                        openAIService.generalChat(message)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "General chat failed", e)
+                        "I'm having trouble connecting right now. I'm here to help with permit compliance questions and general trucking assistance."
+                    }
+                    
+                    val aiMessage = ChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        conversationId = conversationId,
+                        content = summary,
+                        isFromUser = false,
+                        stateContext = effectiveStateCode,
+                        messageType = MessageType.TEXT
+                    )
+                    
+                    _uiState.value = _uiState.value.copy(
+                        messages = _uiState.value.messages + aiMessage,
+                        isLoading = false
+                    )
                 }
                 
             } catch (e: Exception) {
@@ -160,6 +186,191 @@ class ChatViewModel(
     }
     
     /**
+     * NEW COMPLIANCE FLOW: Check permit compliance using deterministic engine + AI summarizer
+     * This replaces the old AI-only approach with a more reliable system
+     */
+    fun checkPermitCompliance(permitId: String? = null) {
+        viewModelScope.launch {
+            try {
+                // Use current permit or load specified one
+                val permit = if (permitId != null) {
+                    permitRepository.getPermitById(permitId)
+                } else {
+                    currentPermit
+                }
+                
+                if (permit == null) {
+                    Log.w(TAG, "No permit available for compliance check")
+                    addSystemMessage("Please select a permit first for compliance checking.")
+                    return@launch
+                }
+                
+                Log.d(TAG, "🔍 Starting new compliance flow for permit: ${permit.permitNumber}")
+                
+                _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+                
+                // Step 1: Load state data (rules + DOT contact)
+                val stateData = StateDataRepository.load(permit.state)
+                Log.d(TAG, "📊 Loaded state data for ${permit.state}")
+                
+                // Step 2: Run deterministic compliance check (Kotlin-only)
+                val complianceCore = ComplianceEngine.compare(permit, stateData.rulesJson)
+                Log.d(TAG, "⚖️ Compliance analysis: ${complianceCore.verdict} (${complianceCore.confidence})")
+                
+                // Step 3: Determine if we should include DOT contact
+                val contact = if (Renderer.shouldIncludeDotContact(complianceCore)) {
+                    stateData.contact
+                } else {
+                    null
+                }
+                
+                // Step 4: Use AI to summarize results into natural language
+                val summary = try {
+                    openAIService.summarizeCompliance(complianceCore, contact)
+                } catch (e: Exception) {
+                    Log.w(TAG, "AI summarizer failed, using fallback", e)
+                    Renderer.createFallbackResponse(complianceCore, contact)
+                }
+                
+                Log.d(TAG, "📝 Generated summary: $summary")
+                
+                // Step 5: Create response based on hands-free mode
+                val isHandsFree = safetyGate.isHandsFree()
+                val response = if (isHandsFree) {
+                    Renderer.toVoiceLine(summary)
+                } else {
+                    Renderer.toTextLine(summary)
+                }
+                
+                // Step 6: Add message to chat
+                val aiMessage = ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    conversationId = conversationId,
+                    content = response,
+                    isFromUser = false,
+                    stateContext = permit.state,
+                    messageType = MessageType.COMPLIANCE_RESULT
+                )
+                
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + aiMessage,
+                    isLoading = false
+                )
+                
+                // Step 7: If hands-free, speak the response
+                if (isHandsFree) {
+                    // TODO: Implement TTS speaking
+                    Log.d(TAG, "🔊 Would speak: $response")
+                }
+                
+                Log.d(TAG, "✅ New compliance flow completed successfully")
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ New compliance flow failed", e)
+                handleChatError(e)
+            }
+        }
+    }
+    
+    /**
+     * Check if message is asking about compliance
+     */
+    private fun isComplianceQuestion(message: String): Boolean {
+        val complianceKeywords = listOf(
+            "compliant", "compliance", "legal", "violation", "permit", "route", 
+            "escort", "restriction", "regulation", "legal", "allowed", "check"
+        )
+        val lowerMessage = message.lowercase()
+        return complianceKeywords.any { lowerMessage.contains(it) }
+    }
+    
+    /**
+     * Run compliance check specifically for a chat message
+     */
+    private suspend fun checkPermitComplianceForMessage(permit: Permit) {
+        try {
+            Log.d(TAG, "🔍 Running compliance check for chat message")
+            
+            // Step 1: Load state data (rules + DOT contact)
+            val stateData = StateDataRepository.load(permit.state)
+            Log.d(TAG, "📊 Loaded state data for ${permit.state}")
+            
+            // Step 2: Run deterministic compliance check (Kotlin-only)
+            val complianceCore = ComplianceEngine.compare(permit, stateData.rulesJson)
+            Log.d(TAG, "⚖️ Compliance analysis: ${complianceCore.verdict} (${complianceCore.confidence})")
+            
+            // Step 3: Determine if we should include DOT contact
+            val contact = if (Renderer.shouldIncludeDotContact(complianceCore)) {
+                stateData.contact
+            } else {
+                null
+            }
+            
+            // Step 4: Use AI to summarize results into natural language
+            val summary = try {
+                openAIService.summarizeCompliance(complianceCore, contact)
+            } catch (e: Exception) {
+                Log.w(TAG, "AI summarizer failed, using fallback", e)
+                Renderer.createFallbackResponse(complianceCore, contact)
+            }
+            
+            Log.d(TAG, "📝 Generated summary: $summary")
+            
+            // Step 5: Create response based on hands-free mode
+            val isHandsFree = safetyGate.isHandsFree()
+            val response = if (isHandsFree) {
+                Renderer.toVoiceLine(summary)
+            } else {
+                Renderer.toTextLine(summary)
+            }
+            
+            // Step 6: Add message to chat
+            val aiMessage = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                conversationId = conversationId,
+                content = response,
+                isFromUser = false,
+                stateContext = permit.state,
+                messageType = MessageType.COMPLIANCE_RESULT
+            )
+            
+            _uiState.value = _uiState.value.copy(
+                messages = _uiState.value.messages + aiMessage,
+                isLoading = false
+            )
+            
+            // Step 7: If hands-free, speak the response
+            if (isHandsFree) {
+                Log.d(TAG, "🔊 Would speak: $response")
+            }
+            
+            Log.d(TAG, "✅ Compliance check for chat completed successfully")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Compliance check for chat failed", e)
+            handleChatError(e)
+        }
+    }
+    
+    /**
+     * Add a system message to the chat
+     */
+    private fun addSystemMessage(message: String) {
+        val systemMessage = ChatMessage(
+            id = UUID.randomUUID().toString(),
+            conversationId = conversationId,
+            content = message,
+            isFromUser = false,
+            stateContext = currentPermit?.state ?: "SYSTEM",
+            messageType = MessageType.SYSTEM
+        )
+        
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages + systemMessage
+        )
+    }
+    
+    /**
      * Load available permits from database
      */
     private fun loadAvailablePermits() {
@@ -167,12 +378,12 @@ class ChatViewModel(
             try {
                 Log.d(TAG, "📋 Loading available permits")
                 
-                // Collect from Flow and filter for valid permits
-                permitRepository.getValidPermits().collect { permits ->
+                // Collect from Flow - get all permits (same as HomeScreen)
+                permitRepository.getAllPermits().collect { permits ->
                     _uiState.value = _uiState.value.copy(
                         availablePermits = permits
                     )
-                    Log.d(TAG, "✅ Loaded ${permits.size} valid permits")
+                    Log.d(TAG, "✅ Loaded ${permits.size} permits (including unvalidated)")
                 }
                 
             } catch (e: Exception) {
@@ -382,6 +593,8 @@ class ChatViewModel(
     override fun onCleared() {
         super.onCleared()
         chatService.close()
+        openAIService.close()
+        safetyGate.stopMonitoring()
     }
 }
 

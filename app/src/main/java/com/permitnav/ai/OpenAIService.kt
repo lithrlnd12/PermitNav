@@ -14,10 +14,14 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.delay
 import org.json.JSONObject
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.*
+import com.clearwaycargo.ai.ComplianceCore
+import com.clearwaycargo.ai.Prompts
+import com.clearwaycargo.data.DotContact
 
 class OpenAIService {
     
@@ -37,8 +41,240 @@ class OpenAIService {
     private val baseUrl = "https://api.openai.com/v1"
     
     /**
+     * Extract permit fields from OCR text (Step 1 of 2-call flow)
+     */
+    suspend fun extractPermitFields(
+        ocrTexts: List<String>,
+        stateCode: String,
+        stateRulesJson: String? = null,
+        routeJson: String? = null
+    ): ExtractionResult = withContext(Dispatchers.IO) {
+        
+        val combinedText = ocrTexts.joinToString("\n\n--- PAGE BREAK ---\n\n")
+        val stateName = getStateName(stateCode)
+        
+        // This method is deprecated - using old prompts for backward compatibility
+        val userPrompt = """CONTEXT:
+{
+  "state": "$stateName",
+  "permit_text": ${JSONObject.quote(combinedText)},
+  "state_rules": ${stateRulesJson ?: "null"},
+  "route": ${routeJson ?: "null"}
+}
+
+OUTPUT: Fill the EXTRACTION OUTPUT schema exactly. Unknown fields → null. When text conflicts or key fields are missing, set needs_human=true and reduce confidence."""
+        
+        makeApiCallWithRetry(
+            systemPrompt = "You are a calm dispatcher assistant for Clearway Cargo's OSOW permits. Extract facts strictly from provided context. If unknown, return null. Do not guess. Return valid JSON only.",
+            userPrompt = userPrompt,
+            maxTokens = 1200,
+            operation = "extraction"
+        ) { responseJson ->
+            parseExtractionResult(responseJson)
+        }
+    }
+    
+    /**
+     * Analyze compliance based on extracted fields (Step 2 of 2-call flow)
+     */
+    suspend fun reasonCompliance(
+        extracted: ExtractionResult,
+        stateRulesJson: String? = null
+    ): ComplianceResult = withContext(Dispatchers.IO) {
+        
+        val extractedJson = serializeExtractionResult(extracted)
+        val userPrompt = """CONTEXT:
+{
+  "extracted": $extractedJson,
+  "state_rules": ${stateRulesJson ?: "null"}
+}
+
+OUTPUT: Fill the COMPLIANCE OUTPUT schema exactly. Avoid speculation. If bridges/routes/time limits are unspecified in rules/context, flag uncertainty."""
+        
+        makeApiCallWithRetry(
+            systemPrompt = "You determine OSOW compliance using extracted fields and optional state rules. Use context only. If a needed rule is missing, state the uncertainty, set needs_human=true. Return valid JSON only.",
+            userPrompt = userPrompt,
+            maxTokens = 1500,
+            operation = "compliance"
+        ) { responseJson ->
+            parseComplianceResult(responseJson)
+        }
+    }
+    
+    /**
+     * Make API call with retry logic for 429/5xx errors
+     */
+    private suspend fun <T> makeApiCallWithRetry(
+        systemPrompt: String,
+        userPrompt: String,
+        maxTokens: Int,
+        operation: String,
+        parser: (JSONObject) -> T
+    ): T {
+        var lastException: Exception? = null
+        
+        for (attempt in 1..2) {
+            try {
+                val requestBody = """
+{
+  "model": "gpt-4o",
+  "messages": [
+    {"role": "system", "content": ${JSONObject.quote(systemPrompt)}},
+    {"role": "user", "content": ${JSONObject.quote(userPrompt)}}
+  ],
+  "temperature": 0.0,
+  "max_tokens": $maxTokens,
+  "response_format": {"type": "json_object"}
+}
+                """.trimIndent()
+                
+                android.util.Log.d("OpenAIService", "Making $operation request (attempt $attempt)")
+                
+                val response = client.post("$baseUrl/chat/completions") {
+                    setBody(requestBody)
+                    header("Content-Type", "application/json")
+                }
+                
+                // Check for rate limit or server errors
+                if (response.status.value == 429 || response.status.value >= 500) {
+                    if (attempt < 2) {
+                        val delay = if (response.status.value == 429) 500L else 250L
+                        android.util.Log.w("OpenAIService", "Retrying after ${response.status} (delay: ${delay}ms)")
+                        delay(delay)
+                        continue
+                    }
+                }
+                
+                if (response.status.value >= 400) {
+                    val errorBody = response.bodyAsText()
+                    android.util.Log.e("OpenAIService", "API Error: $errorBody")
+                    throw Exception("OpenAI API error: ${response.status}")
+                }
+                
+                val responseBody = response.bodyAsText()
+                android.util.Log.d("OpenAIService", "$operation response received (${responseBody.length} chars)")
+                
+                val responseJson = JSONObject(responseBody)
+                val choices = responseJson.getJSONArray("choices")
+                
+                if (choices.length() == 0) {
+                    throw Exception("No response from AI")
+                }
+                
+                val messageContent = choices.getJSONObject(0)
+                    .getJSONObject("message")
+                    .getString("content")
+                
+                val resultJson = JSONObject(messageContent)
+                return parser(resultJson)
+                
+            } catch (e: Exception) {
+                lastException = e
+                android.util.Log.e("OpenAIService", "$operation attempt $attempt failed", e)
+                
+                if (attempt < 2) {
+                    delay(250L) // Brief delay before retry
+                } else {
+                    break
+                }
+            }
+        }
+        
+        // If we get here, all attempts failed
+        android.util.Log.e("OpenAIService", "$operation failed after all retries", lastException)
+        throw lastException ?: Exception("$operation failed after retries")
+    }
+    
+    /**
+     * Parse extraction API response into ExtractionResult
+     */
+    private fun parseExtractionResult(json: JSONObject): ExtractionResult {
+        val permitInfo = json.optJSONObject("permitInfo")
+        val vehicleInfo = json.optJSONObject("vehicleInfo") 
+        val dimensions = json.optJSONObject("dimensions")
+        
+        return ExtractionResult(
+            permitInfo = PermitInfo(
+                state = permitInfo?.optString("state"),
+                permitNumber = permitInfo?.optString("permitNumber"),
+                issueDate = permitInfo?.optString("issueDate"),
+                expirationDate = permitInfo?.optString("expirationDate"),
+                permitType = permitInfo?.optString("permitType")
+            ),
+            vehicleInfo = AiVehicleInfo(
+                licensePlate = vehicleInfo?.optString("licensePlate"),
+                vin = vehicleInfo?.optString("vin"),
+                carrierName = vehicleInfo?.optString("carrierName"),
+                usdot = vehicleInfo?.optString("usdot")
+            ),
+            dimensions = Dimensions(
+                length = dimensions?.optDouble("length")?.takeIf { !it.isNaN() },
+                width = dimensions?.optDouble("width")?.takeIf { !it.isNaN() },
+                height = dimensions?.optDouble("height")?.takeIf { !it.isNaN() },
+                weight = dimensions?.optDouble("weight")?.takeIf { !it.isNaN() },
+                axles = dimensions?.optInt("axles")?.takeIf { it > 0 }
+            ),
+            complianceInputsFound = jsonArrayToList(json.optJSONArray("complianceInputsFound")),
+            confidence = json.optDouble("confidence", 0.0).clamp01(),
+            needs_human = json.optBoolean("needs_human", false),
+            sources_used = jsonArrayToList(json.optJSONArray("sources_used"))
+        )
+    }
+    
+    /**
+     * Parse compliance API response into ComplianceResult
+     */
+    private fun parseComplianceResult(json: JSONObject): ComplianceResult {
+        return ComplianceResult(
+            isCompliant = if (json.has("isCompliant")) json.optBoolean("isCompliant") else null,
+            violations = jsonArrayToList(json.optJSONArray("violations")),
+            warnings = jsonArrayToList(json.optJSONArray("warnings")),
+            recommendations = jsonArrayToList(json.optJSONArray("recommendations")),
+            requiredActions = jsonArrayToList(json.optJSONArray("requiredActions")),
+            stateSpecificNotes = jsonArrayToList(json.optJSONArray("stateSpecificNotes")),
+            confidence = json.optDouble("confidence", 0.0).clamp01(),
+            needs_human = json.optBoolean("needs_human", false),
+            sources_used = jsonArrayToList(json.optJSONArray("sources_used"))
+        )
+    }
+    
+    /**
+     * Serialize ExtractionResult back to JSON for compliance analysis
+     */
+    private fun serializeExtractionResult(extracted: ExtractionResult): String {
+        return JSONObject().apply {
+            put("permitInfo", JSONObject().apply {
+                put("state", extracted.permitInfo.state)
+                put("permitNumber", extracted.permitInfo.permitNumber)
+                put("issueDate", extracted.permitInfo.issueDate)
+                put("expirationDate", extracted.permitInfo.expirationDate)
+                put("permitType", extracted.permitInfo.permitType)
+            })
+            put("vehicleInfo", JSONObject().apply {
+                put("licensePlate", extracted.vehicleInfo.licensePlate)
+                put("vin", extracted.vehicleInfo.vin)
+                put("carrierName", extracted.vehicleInfo.carrierName)
+                put("usdot", extracted.vehicleInfo.usdot)
+            })
+            put("dimensions", JSONObject().apply {
+                put("length", extracted.dimensions.length)
+                put("width", extracted.dimensions.width)
+                put("height", extracted.dimensions.height)
+                put("weight", extracted.dimensions.weight)
+                put("axles", extracted.dimensions.axles)
+            })
+            put("complianceInputsFound", JSONArray(extracted.complianceInputsFound))
+            put("confidence", extracted.confidence)
+            put("needs_human", extracted.needs_human)
+            put("sources_used", JSONArray(extracted.sources_used))
+        }.toString()
+    }
+    
+    /**
      * National permit analysis using OpenAI - works with any US state
      * This replaces the need for individual state JSON files
+     * 
+     * @deprecated Use extractPermitFields + reasonCompliance for better reliability
      */
     suspend fun analyzePermitNational(
         ocrTexts: List<String>,
@@ -451,6 +687,146 @@ Return as JSON:
             "WY" -> "Wyoming"
             "DC" -> "District of Columbia"
             else -> stateCode
+        }
+    }
+    
+    /**
+     * Summarize compliance results into natural language
+     * This is the new summarizer-only approach - no law lookup
+     */
+    suspend fun summarizeCompliance(
+        core: ComplianceCore, 
+        contact: DotContact?
+    ): String = withContext(Dispatchers.IO) {
+        
+        val coreJson = serializeComplianceCore(core)
+        val contactJson = contact?.let { serializeDotContact(it) }
+        
+        val userPrompt = Prompts.userSummaryPrompt(coreJson, contactJson)
+        
+        try {
+            val requestBody = """
+{
+  "model": "gpt-4o",
+  "messages": [
+    {"role": "system", "content": ${JSONObject.quote(Prompts.SYSTEM_SUMMARY)}},
+    {"role": "user", "content": ${JSONObject.quote(userPrompt)}}
+  ],
+  "temperature": 0.0,
+  "max_tokens": 150
+}
+            """.trimIndent()
+            
+            android.util.Log.d("OpenAIService", "Making compliance summary request")
+            
+            val response = client.post("$baseUrl/chat/completions") {
+                setBody(requestBody)
+                header("Content-Type", "application/json")
+            }
+            
+            if (response.status.value >= 400) {
+                val errorBody = response.bodyAsText()
+                android.util.Log.e("OpenAIService", "Summary API Error: $errorBody")
+                throw Exception("OpenAI API error: ${response.status}")
+            }
+            
+            val responseBody = response.bodyAsText()
+            android.util.Log.d("OpenAIService", "Summary response received")
+            
+            val responseJson = JSONObject(responseBody)
+            val choices = responseJson.getJSONArray("choices")
+            
+            if (choices.length() == 0) {
+                throw Exception("No response from AI summarizer")
+            }
+            
+            val messageContent = choices.getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+            
+            return@withContext messageContent.trim()
+            
+        } catch (e: Exception) {
+            android.util.Log.e("OpenAIService", "Compliance summarization failed", e)
+            throw e
+        }
+    }
+    
+    /**
+     * Serialize ComplianceCore to JSON for the summarizer
+     */
+    private fun serializeComplianceCore(core: ComplianceCore): String {
+        return JSONObject().apply {
+            put("verdict", core.verdict)
+            put("reasons", JSONArray(core.reasons))
+            put("mustDo", JSONArray(core.mustDo))
+            put("confidence", core.confidence)
+            put("needsHuman", core.needsHuman)
+            put("escortHints", JSONArray(core.escortHints))
+        }.toString()
+    }
+    
+    /**
+     * Serialize DotContact to JSON for the summarizer
+     */
+    private fun serializeDotContact(contact: DotContact): String {
+        return JSONObject().apply {
+            put("agency", contact.agency)
+            put("phone", contact.phone)
+            put("url", contact.url)
+            put("hours", contact.hours)
+        }.toString()
+    }
+    
+    /**
+     * Simple general chat method for non-compliance questions
+     */
+    suspend fun generalChat(message: String): String = withContext(Dispatchers.IO) {
+        try {
+            val requestBody = """
+{
+  "model": "gpt-4o",
+  "messages": [
+    {"role": "system", "content": "You are Clearway Cargo's helpful dispatcher assistant. Keep responses brief, friendly, and professional. Answer in 1-3 sentences."},
+    {"role": "user", "content": ${JSONObject.quote(message)}}
+  ],
+  "temperature": 0.3,
+  "max_tokens": 150
+}
+            """.trimIndent()
+            
+            android.util.Log.d("OpenAIService", "Making general chat request")
+            
+            val response = client.post("$baseUrl/chat/completions") {
+                setBody(requestBody)
+                header("Content-Type", "application/json")
+            }
+            
+            if (response.status.value >= 400) {
+                val errorBody = response.bodyAsText()
+                android.util.Log.e("OpenAIService", "General chat API Error: $errorBody")
+                throw Exception("OpenAI API error: ${response.status}")
+            }
+            
+            val responseBody = response.bodyAsText()
+            android.util.Log.d("OpenAIService", "General chat response received")
+            
+            val responseJson = JSONObject(responseBody)
+            val choices = responseJson.getJSONArray("choices")
+            
+            if (choices.length() == 0) {
+                throw Exception("No response from AI")
+            }
+            
+            val messageContent = choices.getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+            
+            return@withContext messageContent.trim()
+            
+        } catch (e: Exception) {
+            android.util.Log.e("OpenAIService", "General chat failed", e)
+            throw e
         }
     }
     

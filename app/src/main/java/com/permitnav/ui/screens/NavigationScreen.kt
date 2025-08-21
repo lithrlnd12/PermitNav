@@ -6,11 +6,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +42,15 @@ import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
+import com.google.android.gms.maps.model.Dash
+import com.google.android.gms.maps.model.Gap
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.permitnav.services.HazardDetectionService
+import com.permitnav.data.models.TruckHazard
+import com.permitnav.data.models.HazardType
+import com.permitnav.data.models.HazardSeverity
+import com.permitnav.data.models.ManeuverType
+import com.permitnav.navigation.FlexiblePolylineDecoder
 import com.permitnav.R
 import com.permitnav.ui.theme.*
 import com.permitnav.ui.viewmodels.NavigationViewModel
@@ -58,6 +71,10 @@ fun NavigationScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
     val authViewModel: AuthViewModel = viewModel()
     
+    // State for destination input dialog
+    var showDestinationDialog by remember { mutableStateOf(false) }
+    var destinationInput by remember { mutableStateOf("") }
+    
     // Location permission state
     val locationPermissionState = rememberPermissionState(
         permission = Manifest.permission.ACCESS_FINE_LOCATION
@@ -66,14 +83,30 @@ fun NavigationScreen(
     // Load permit and calculate route when screen loads
     LaunchedEffect(permitId) {
         android.util.Log.d("NavigationScreen", "Loading permit and calculating route for: $permitId")
+        
+        // Request location permission first if not granted
+        if (!locationPermissionState.status.isGranted) {
+            locationPermissionState.launchPermissionRequest()
+        }
+        
         viewModel.loadPermitAndCalculateRoute(permitId)
     }
     
-    // Start navigation automatically when permission is granted and route is available
-    LaunchedEffect(locationPermissionState.status.isGranted, uiState.route) {
-        if (locationPermissionState.status.isGranted && uiState.route != null && !uiState.isNavigating) {
-            // Auto-start navigation if user has already granted permission
-            // This creates a seamless experience after permission is granted
+    // Pre-populate destination input with permit destination when available
+    LaunchedEffect(uiState.permit?.destination) {
+        uiState.permit?.destination?.let { permitDestination ->
+            if (destinationInput.isEmpty() && permitDestination.isNotBlank()) {
+                destinationInput = permitDestination
+            }
+        }
+    }
+    
+    // Recalculate route with real location when permission is granted
+    LaunchedEffect(locationPermissionState.status.isGranted) {
+        if (locationPermissionState.status.isGranted && uiState.route != null) {
+            // Recalculate route with actual GPS location
+            android.util.Log.d("NavigationScreen", "Location permission granted, recalculating route with GPS")
+            viewModel.loadPermitAndCalculateRoute(permitId)
         }
     }
     
@@ -115,7 +148,6 @@ fun NavigationScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .background(SecondaryBlue)
         ) {
             when {
                 uiState.isLoading -> {
@@ -169,17 +201,38 @@ fun NavigationScreen(
                 }
                 else -> {
                     // Always show the map - it should be visible in both preview and navigation modes
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.LightGray) // Gray background so we can see if map loads
+                    ) {
+                        // Debugging: show a simple text overlay to ensure the container is working
+                        if (uiState.route == null) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Calculating route...\nMap will appear here",
+                                    textAlign = TextAlign.Center,
+                                    color = Color.DarkGray
+                                )
+                            }
+                        }
+                        
                         GoogleMapView(
                             route = uiState.route,
-                            isNavigating = uiState.isNavigating
+                            isNavigating = uiState.isNavigating,
+                            hazards = emptyList() // Will be populated from HazardDetectionService
                         )
                         
                         if (uiState.isNavigating) {
-                            // During navigation: Show compact navigation card at top and stop button at bottom
-                            NavigationCard(
+                            // During navigation: Show enhanced navigation card with real maneuver info
+                            EnhancedNavigationCard(
                                 currentInstruction = uiState.currentInstruction,
                                 nextInstruction = uiState.nextInstruction,
+                                remainingDistance = uiState.routeDistance,
+                                estimatedTime = uiState.routeDuration,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .align(Alignment.TopCenter)
@@ -223,29 +276,71 @@ fun NavigationScreen(
                                     route = uiState.route,
                                     isLoading = uiState.isLoading
                                 )
+                            }
+                            
+                            // Check if we have a route and previously stopped navigation
+                            val hasStoppedNavigation = remember(uiState) {
+                                uiState.route != null && 
+                                uiState.currentInstruction == "Navigation stopped"
+                            }
+                            
+                            // Navigation control buttons at bottom
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.BottomCenter)
+                                    .padding(16.dp),
+                                horizontalArrangement = if (hasStoppedNavigation) Arrangement.spacedBy(8.dp) else Arrangement.Center
+                            ) {
+                                // Resume button if navigation was stopped
+                                if (hasStoppedNavigation) {
+                                    Button(
+                                        onClick = { viewModel.resumeNavigation() },
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(56.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = SuccessGreen
+                                        )
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "Resume",
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
                                 
-                                Spacer(modifier = Modifier.height(16.dp))
-                                
+                                // Start/Restart Navigation button
                                 Button(
                                     onClick = { 
-                                        if (locationPermissionState.status.isGranted) {
-                                            viewModel.startNavigation()
-                                        } else {
+                                        if (!locationPermissionState.status.isGranted) {
                                             locationPermissionState.launchPermissionRequest()
+                                        } else {
+                                            // Always show destination input dialog for user-friendly experience
+                                            showDestinationDialog = true
                                         }
                                     },
                                     modifier = Modifier
-                                        .fillMaxWidth()
+                                        .then(if (hasStoppedNavigation) Modifier.weight(1f) else Modifier.fillMaxWidth())
                                         .height(56.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = SuccessGreen
-                                    )
+                                        containerColor = if (hasStoppedNavigation) SecondaryBlue else PrimaryOrange
+                                    ),
+                                    enabled = uiState.route != null
                                 ) {
                                     Icon(Icons.Default.Navigation, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        if (locationPermissionState.status.isGranted) "Start Directions" else "Grant Location Access",
-                                        fontWeight = FontWeight.SemiBold
+                                        when {
+                                            !locationPermissionState.status.isGranted -> "Grant Location"
+                                            hasStoppedNavigation -> "Restart"
+                                            else -> "Enter Destination"
+                                        },
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White
                                     )
                                 }
                             }
@@ -314,20 +409,99 @@ fun NavigationScreen(
             onDismiss = { showChatOverlay = false }
         )
     }
+    
+    // Destination input dialog
+    if (showDestinationDialog) {
+        AlertDialog(
+            onDismissRequest = { showDestinationDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = PrimaryOrange,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Enter Destination",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        "Enter your exact destination address. The route will be planned from your current GPS location to this destination while maintaining permit compliance:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = destinationInput,
+                        onValueChange = { destinationInput = it },
+                        label = { Text("Destination address") },
+                        placeholder = { Text("e.g., 123 Main St, Columbus, OH 43215") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = false,
+                        maxLines = 3,
+                        supportingText = {
+                            Text(
+                                "Tip: Include city and state for best results",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
+                            )
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (destinationInput.isNotBlank()) {
+                            viewModel.updateDestination(destinationInput)
+                            showDestinationDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = PrimaryOrange
+                    ),
+                    enabled = destinationInput.isNotBlank()
+                ) {
+                    Text("Start Navigation")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showDestinationDialog = false }
+                ) {
+                    Text("Cancel", color = SecondaryBlue)
+                }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun GoogleMapView(
     route: com.permitnav.data.models.Route?,
-    isNavigating: Boolean
+    isNavigating: Boolean,
+    hazards: List<TruckHazard> = emptyList()
 ) {
-    // Camera position state
+    // Camera position state - start with route center if available
     val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(
-            LatLng(39.7684, -86.1581), // Indianapolis default
-            10f
-        )
+        val initialPosition = route?.let {
+            // Center between origin and destination
+            val centerLat = (it.origin.latitude + it.destination.latitude) / 2
+            val centerLng = (it.origin.longitude + it.destination.longitude) / 2
+            LatLng(centerLat, centerLng)
+        } ?: LatLng(39.7684, -86.1581) // Indianapolis fallback
+        
+        position = CameraPosition.fromLatLngZoom(initialPosition, 10f)
     }
     
     // Get location permission state for maps
@@ -340,22 +514,40 @@ fun GoogleMapView(
         route?.let {
             android.util.Log.d("NavigationScreen", "Moving camera to route bounds: ${it.origin.latitude},${it.origin.longitude} -> ${it.destination.latitude},${it.destination.longitude}")
             
-            // Use immediate positioning instead of animation to avoid coroutine issues
-            val bounds = LatLngBounds.builder()
-                .include(LatLng(it.origin.latitude, it.origin.longitude))
-                .include(LatLng(it.destination.latitude, it.destination.longitude))
-                .build()
-            
-            cameraPositionState.move(
-                CameraUpdateFactory.newLatLngBounds(bounds, 200)
-            )
+            try {
+                // Build bounds that include all route points
+                val boundsBuilder = LatLngBounds.builder()
+                boundsBuilder.include(LatLng(it.origin.latitude, it.origin.longitude))
+                boundsBuilder.include(LatLng(it.destination.latitude, it.destination.longitude))
+                
+                // Add polyline points to bounds if available
+                it.polyline?.let { polylineString ->
+                    val decodedPoints = decodeHerePolylineToLatLng(polylineString)
+                    decodedPoints.forEach { point ->
+                        boundsBuilder.include(point)
+                    }
+                }
+                
+                val bounds = boundsBuilder.build()
+                cameraPositionState.move(
+                    CameraUpdateFactory.newLatLngBounds(bounds, 100)
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("NavigationScreen", "Error setting camera bounds", e)
+                // Fallback to showing origin with good zoom
+                android.util.Log.d("NavigationScreen", "Using fallback camera position at origin")
+                cameraPositionState.move(
+                    CameraUpdateFactory.newLatLngZoom(
+                        LatLng(it.origin.latitude, it.origin.longitude), 
+                        14f
+                    )
+                )
+            }
         }
     }
     
     GoogleMap(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Gray), // Ensure map has background
+        modifier = Modifier.fillMaxSize(),
         cameraPositionState = cameraPositionState,
         properties = MapProperties(
             mapType = MapType.NORMAL,
@@ -363,13 +555,18 @@ fun GoogleMapView(
             isMyLocationEnabled = locationPermissionState.status.isGranted
         ),
         uiSettings = MapUiSettings(
-            zoomControlsEnabled = true, // Show zoom controls for debugging
+            zoomControlsEnabled = true,
             myLocationButtonEnabled = locationPermissionState.status.isGranted,
-            mapToolbarEnabled = false,
-            compassEnabled = true
+            mapToolbarEnabled = true,
+            compassEnabled = true,
+            zoomGesturesEnabled = true,
+            scrollGesturesEnabled = true,
+            tiltGesturesEnabled = true,
+            rotationGesturesEnabled = true
         ),
         onMapLoaded = {
-            android.util.Log.d("NavigationScreen", "Google Maps loaded successfully!")
+            android.util.Log.d("NavigationScreen", "✅ Google Maps loaded successfully!")
+            android.util.Log.d("NavigationScreen", "Current camera position: ${cameraPositionState.position}")
         },
         onMapClick = { latLng ->
             android.util.Log.d("NavigationScreen", "Map clicked at: ${latLng.latitude}, ${latLng.longitude}")
@@ -388,27 +585,80 @@ fun GoogleMapView(
                 snippet = r.origin.name ?: "Origin"
             )
             
-            // End marker  
+            // End marker - use a nearby road if coordinates are off-road
             Marker(
                 state = rememberMarkerState(
                     position = LatLng(r.destination.latitude, r.destination.longitude)
                 ),
                 title = "Destination", 
-                snippet = r.destination.name ?: "Destination"
+                snippet = r.destination.name ?: "Final destination coordinates"
             )
             
-            // Route polyline
+            // Route polyline decoded from HERE flexible polyline
             r.polyline?.let { polylineString ->
-                val decodedPoints = decodeHerePolylineToLatLng(polylineString)
-                android.util.Log.d("NavigationScreen", "Rendering polyline with ${decodedPoints.size} points")
+                val decodedPoints = try {
+                    FlexiblePolylineDecoder.decodePolyline(polylineString)
+                } catch (e: Exception) {
+                    android.util.Log.e("NavigationScreen", "Failed to decode polyline", e)
+                    emptyList()
+                }
+                
                 if (decodedPoints.isNotEmpty()) {
                     Polyline(
                         points = decodedPoints,
                         color = PrimaryOrange,
-                        width = 12f // Make thicker for visibility
+                        width = 12f,
+                        geodesic = true
+                    )
+                    android.util.Log.d("NavigationScreen", "Rendered polyline with ${decodedPoints.size} points")
+                } else {
+                    // Fallback: Draw straight line
+                    Polyline(
+                        points = listOf(
+                            LatLng(r.origin.latitude, r.origin.longitude),
+                            LatLng(r.destination.latitude, r.destination.longitude)
+                        ),
+                        color = PrimaryOrange.copy(alpha = 0.7f),
+                        width = 8f,
+                        pattern = listOf(Dash(10f), Gap(10f)),
+                        geodesic = true
                     )
                 }
             }
+        }
+        
+        // Add hazard markers
+        hazards.forEach { hazard ->
+            val markerColor = when (hazard.severity) {
+                HazardSeverity.CRITICAL -> BitmapDescriptorFactory.HUE_RED
+                HazardSeverity.HIGH -> BitmapDescriptorFactory.HUE_ORANGE
+                HazardSeverity.MEDIUM -> BitmapDescriptorFactory.HUE_YELLOW
+                HazardSeverity.LOW -> BitmapDescriptorFactory.HUE_GREEN
+                HazardSeverity.INFO -> BitmapDescriptorFactory.HUE_BLUE
+            }
+            
+            val icon = when (hazard.type) {
+                HazardType.LOW_CLEARANCE -> "🌉"
+                HazardType.WEIGHT_RESTRICTION -> "⚖️"
+                HazardType.CONSTRUCTION -> "🚧"
+                HazardType.WEIGH_STATION -> "🏗️"
+                HazardType.TRUCK_PARKING -> "🅿️"
+                HazardType.FUEL_STOP -> "⛽"
+                HazardType.HIGH_WIND -> "💨"
+                HazardType.ACCIDENT -> "⚠️"
+                else -> "⚠️"
+            }
+            
+            Marker(
+                state = rememberMarkerState(position = hazard.location),
+                title = "$icon ${hazard.title}",
+                snippet = hazard.description,
+                icon = BitmapDescriptorFactory.defaultMarker(markerColor),
+                onClick = { marker ->
+                    marker.showInfoWindow()
+                    true
+                }
+            )
         }
     }
 }
@@ -790,6 +1040,161 @@ fun NavigationCard(
 }
 
 @Composable
+fun EnhancedNavigationCard(
+    currentInstruction: String,
+    nextInstruction: String,
+    remainingDistance: String,
+    estimatedTime: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+            // Main navigation instruction
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(PrimaryOrange),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        getManeuverIcon(currentInstruction),
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+                
+                Spacer(modifier = Modifier.width(16.dp))
+                
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        currentInstruction,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        color = Color.Black
+                    )
+                }
+            }
+            
+            // Distance and time info
+            Spacer(modifier = Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Route,
+                        contentDescription = null,
+                        tint = SecondaryBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        remainingDistance,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SecondaryBlue
+                    )
+                }
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Timer,
+                        contentDescription = null,
+                        tint = SuccessGreen,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        estimatedTime,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = SuccessGreen
+                    )
+                }
+            }
+            
+            // Next instruction preview
+            if (nextInstruction.isNotEmpty() && nextInstruction != "Continue following route") {
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = Color.Gray.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(SecondaryBlue.copy(alpha = 0.1f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            getManeuverIcon(nextInstruction),
+                            contentDescription = null,
+                            tint = SecondaryBlue,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.width(12.dp))
+                    
+                    Text(
+                        "Then: ${nextInstruction.removePrefix("Next: ")}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = SecondaryBlue,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Get appropriate icon for maneuver based on instruction text
+ */
+private fun getManeuverIcon(instruction: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val lowerInstruction = instruction.lowercase()
+    
+    return when {
+        lowerInstruction.contains("turn right") || lowerInstruction.contains("right turn") -> Icons.Default.TurnRight
+        lowerInstruction.contains("turn left") || lowerInstruction.contains("left turn") -> Icons.Default.TurnLeft
+        lowerInstruction.contains("straight") || lowerInstruction.contains("continue") -> Icons.Default.Straight
+        lowerInstruction.contains("merge") -> Icons.Default.Merge
+        lowerInstruction.contains("exit") || lowerInstruction.contains("ramp") -> Icons.Default.ExitToApp
+        lowerInstruction.contains("roundabout") -> Icons.Default.RotateRight
+        lowerInstruction.contains("u-turn") || lowerInstruction.contains("uturn") -> Icons.Default.UTurnLeft
+        lowerInstruction.contains("keep right") -> Icons.Default.TrendingUp
+        lowerInstruction.contains("keep left") -> Icons.Default.TrendingDown
+        lowerInstruction.contains("destination") || lowerInstruction.contains("arrive") -> Icons.Default.Flag
+        lowerInstruction.contains("start") || lowerInstruction.contains("depart") -> Icons.Default.PlayArrow
+        else -> Icons.Default.Navigation
+    }
+}
+
+@Composable
 fun RouteInfoCard(
     distance: String = "-- mi",
     duration: String = "-- min", 
@@ -979,27 +1384,8 @@ fun RoutePreviewCard(
         colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp)
+            modifier = Modifier.padding(16.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Route,
-                    contentDescription = null,
-                    tint = PrimaryOrange,
-                    modifier = Modifier.size(32.dp)
-                )
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    "Navigation Instructions",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
             when {
                 isLoading -> {
                     Row(
@@ -1020,83 +1406,69 @@ fun RoutePreviewCard(
                     }
                 }
                 route != null -> {
-                    // Route summary with larger text
-                    Card(
+                    // Compact route header
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = PrimaryOrange.copy(alpha = 0.1f)
-                        )
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp)
-                        ) {
+                        Icon(
+                            Icons.Default.Route,
+                            contentDescription = null,
+                            tint = PrimaryOrange,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                "${route.origin.name ?: "Origin"}",
-                                style = MaterialTheme.typography.titleLarge,
+                                "${route.origin.name ?: "Start"} → ${route.destination.name ?: "End"}",
+                                style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = PrimaryOrange
+                                color = PrimaryOrange,
+                                maxLines = 1
                             )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ArrowDownward,
-                                    contentDescription = null,
-                                    tint = PrimaryOrange,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    "${route.turnByTurnInstructions.size} turns",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = TextSecondary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
                             Text(
-                                "${route.destination.name ?: "Destination"}",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = PrimaryOrange
+                                "${route.turnByTurnInstructions.size} turns",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary
                             )
                         }
                     }
                     
                     if (route.turnByTurnInstructions.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider(color = Color.Gray.copy(alpha = 0.2f))
+                        Spacer(modifier = Modifier.height(12.dp))
                         
                         Text(
                             "Turn-by-Turn Instructions",
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            color = PrimaryOrange
+                            color = SecondaryBlue
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         
-                        Column(
-                            modifier = Modifier
-                                .heightIn(max = 300.dp)
-                                .verticalScroll(rememberScrollState())
+                        LazyColumn(
+                            modifier = Modifier.heightIn(max = 500.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            route.turnByTurnInstructions.forEachIndexed { index, instruction ->
+                            items(route.turnByTurnInstructions.size) { index ->
+                                val instruction = route.turnByTurnInstructions[index]
                                 Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
+                                    modifier = Modifier.fillMaxWidth(),
                                     colors = CardDefaults.cardColors(
                                         containerColor = if (index == 0) SuccessGreen.copy(alpha = 0.1f) 
                                                         else Color.Gray.copy(alpha = 0.05f)
-                                    )
+                                    ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(16.dp),
-                                        verticalAlignment = Alignment.CenterVertically
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.Top
                                     ) {
                                         Box(
                                             modifier = Modifier
-                                                .size(36.dp)
-                                                .clip(RoundedCornerShape(8.dp))
+                                                .size(28.dp)
+                                                .clip(CircleShape)
                                                 .background(
                                                     if (index == 0) SuccessGreen else PrimaryOrange
                                                 ),
@@ -1104,19 +1476,19 @@ fun RoutePreviewCard(
                                         ) {
                                             Text(
                                                 "${index + 1}",
-                                                style = MaterialTheme.typography.titleMedium,
+                                                style = MaterialTheme.typography.labelMedium,
                                                 color = Color.White,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
-                                        Spacer(modifier = Modifier.width(16.dp))
+                                        Spacer(modifier = Modifier.width(10.dp))
                                         Text(
                                             instruction.instruction,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = if (index == 0) FontWeight.Bold else FontWeight.Medium,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (index == 0) FontWeight.SemiBold else FontWeight.Normal,
                                             color = if (index == 0) SuccessGreen else Color.Black,
                                             modifier = Modifier.weight(1f),
-                                            lineHeight = MaterialTheme.typography.bodyLarge.lineHeight
+                                            lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.1
                                         )
                                     }
                                 }

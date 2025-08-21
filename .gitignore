@@ -121,7 +121,16 @@ Thumbs.db
 # HERE SDK examples (if present)
 heresdk-examples/
 here-sdk-examples/
-heresdk-explore-android-*/# Sensitive files 
+heresdk-explore-android-*/
+
+# Node.js and Firebase backend
+permitnav_backend/node_modules/
+permitnav_backend/.env
+permitnav_backend/npm-debug.log*
+permitnav_backend/yarn-debug.log*
+permitnav_backend/yarn-error.log*
+
+# Sensitive files 
 *.keystore 
 *.jks 
 google-services.json 

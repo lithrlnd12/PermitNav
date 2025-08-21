@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
+import com.permitnav.navigation.FlexiblePolylineDecoder
 
 class HereRoutingService {
     
@@ -44,10 +45,11 @@ class HereRoutingService {
         destination: Location,
         permit: Permit,
         waypoints: List<Location> = emptyList()
-    ): Route = withContext(Dispatchers.IO) {
+    ): RouteWithActions = withContext(Dispatchers.IO) {
         
         val truckParams = buildTruckParameters(permit.dimensions)
         val avoidances = buildAvoidances(permit.restrictions)
+        val stateRules = loadStateRules(permit.state ?: "IN")
         
         val url = buildString {
             append("$baseUrl/routes")
@@ -56,14 +58,17 @@ class HereRoutingService {
             append("&origin=${origin.latitude},${origin.longitude}")
             append("&destination=${destination.latitude},${destination.longitude}")
             
+            // Add waypoints with passThrough=true for required permit stops
             waypoints.forEachIndexed { index, waypoint ->
-                append("&via=${waypoint.latitude},${waypoint.longitude}")
+                append("&via=${waypoint.latitude},${waypoint.longitude}!passThrough=true")
             }
             
+            // Return parameters for route and turn-by-turn guidance
             append("&return=polyline,actions,instructions,summary,travelSummary")
             
             append(truckParams)
             append(avoidances)
+            append(stateRules)
         }
         
         try {
@@ -82,7 +87,7 @@ class HereRoutingService {
             // Parse successful response
             val json = Json { ignoreUnknownKeys = true }
             val response = json.decodeFromString<HereRouteResponse>(responseText)
-            mapHereResponseToRoute(response, permit.id, origin, destination)
+            mapHereResponseToRouteWithActions(response, permit.id, origin, destination)
         } catch (e: Exception) {
             android.util.Log.e("HereRouting", "Failed to calculate route", e)
             throw RoutingException("Failed to calculate route: ${e.message}", e)
@@ -121,30 +126,61 @@ class HereRoutingService {
     private fun buildAvoidances(restrictions: List<String>): String {
         val avoidList = mutableListOf<String>()
         
-        if (restrictions.any { it.contains("Interstate travel prohibited", ignoreCase = true) }) {
-            avoidList.add("controlledAccessHighway")
+        restrictions.forEach { restriction ->
+            when {
+                restriction.contains("Interstate travel prohibited", ignoreCase = true) -> {
+                    avoidList.add("controlledAccessHighway")
+                }
+                restriction.contains("tunnel", ignoreCase = true) -> {
+                    avoidList.add("tunnel")
+                }
+                restriction.contains("ferry", ignoreCase = true) -> {
+                    avoidList.add("ferry")
+                }
+                // Note: "bridge" is not a valid HERE API avoid feature
+                // Bridge restrictions would be handled differently through truck attributes
+            }
         }
         
         return if (avoidList.isNotEmpty()) {
-            "&avoid[features]=${avoidList.joinToString(",")}"
+            // Remove duplicates and join
+            "&avoid[features]=${avoidList.distinct().joinToString(",")}"
         } else {
             ""
         }
     }
     
-    private fun mapHereResponseToRoute(
+    /**
+     * Load state-specific routing rules from assets/state_rules/{state}.json
+     */
+    private fun loadStateRules(state: String): String {
+        // For MVP, return empty string
+        // TODO: Implement state rule loading from assets/state_rules/{state}.json
+        return ""
+    }
+    
+    private fun mapHereResponseToRouteWithActions(
         response: HereRouteResponse,
         permitId: String,
         origin: Location,
         destination: Location
-    ): Route {
+    ): RouteWithActions {
         val route = response.routes.firstOrNull() 
             ?: throw RoutingException("No route found")
         
         val section = route.sections.firstOrNull() 
             ?: throw RoutingException("No route sections found")
         
-        return Route(
+        // Get raw actions from HERE response
+        val rawActions = section.actions ?: emptyList()
+        android.util.Log.d("HereRouting", "HERE API returned ${rawActions.size} actions")
+        
+        // Validate actions
+        if (rawActions.isEmpty()) {
+            android.util.Log.w("HereRouting", "No actions found in HERE response - route may be invalid")
+        }
+        
+        val mappedRoute = Route(
             id = System.currentTimeMillis().toString(),
             permitId = permitId,
             origin = origin,
@@ -156,19 +192,42 @@ class HereRoutingService {
             restrictions = extractRestrictions(route),
             tollCost = section.tolls?.totalCost
         )
+        
+        return RouteWithActions(
+            route = mappedRoute,
+            rawActions = rawActions
+        )
     }
     
     private fun mapInstructions(section: HereRouteSection): List<NavigationInstruction> {
-        return section.actions?.map { action ->
+        return section.actions?.mapIndexed { index, action ->
+            // Calculate location based on offset into polyline
+            val location = try {
+                if (action.offset != null) {
+                    val decodedPoints = FlexiblePolylineDecoder.decodePolyline(section.polyline)
+                    if (action.offset < decodedPoints.size) {
+                        val point = decodedPoints[action.offset]
+                        Location(
+                            latitude = point.latitude,
+                            longitude = point.longitude
+                        )
+                    } else {
+                        Location(latitude = 0.0, longitude = 0.0)
+                    }
+                } else {
+                    Location(latitude = 0.0, longitude = 0.0)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("HereRouting", "Failed to decode location for instruction $index", e)
+                Location(latitude = 0.0, longitude = 0.0)
+            }
+            
             NavigationInstruction(
                 instruction = action.instruction ?: "Continue",
                 distance = action.length?.toDouble() ?: 0.0,
                 duration = action.duration?.toLong() ?: 0L,
                 maneuver = action.action ?: "continue",
-                location = Location(
-                    latitude = 0.0,
-                    longitude = 0.0
-                ),
+                location = location,
                 streetName = action.road?.name
             )
         } ?: emptyList()
@@ -225,6 +284,11 @@ class HereRoutingService {
 }
 
 class RoutingException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+data class RouteWithActions(
+    val route: Route,
+    val rawActions: List<RouteAction>
+)
 
 @Serializable
 data class HereRouteResponse(

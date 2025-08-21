@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -34,6 +35,10 @@ import com.google.accompanist.permissions.rememberPermissionState
 import com.permitnav.data.models.Permit
 import com.permitnav.ui.theme.*
 import com.permitnav.ui.viewmodels.AuthViewModel
+import com.permitnav.ui.viewmodels.HomeViewModel
+import android.content.Intent
+import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -45,7 +50,8 @@ fun HomeScreen(
     onNavigateToMultiCapture: () -> Unit,
     onNavigateToVault: () -> Unit,
     onNavigateToNavigation: (String) -> Unit,
-    onNavigateToChat: () -> Unit = {},
+    onNavigateToChat: (String?) -> Unit = {},
+    onNavigateToVoiceChat: (String?) -> Unit = {},
     onNavigateToAuth: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -54,8 +60,21 @@ fun HomeScreen(
     var showBottomSheet by remember { mutableStateOf(false) }
     var showCaptureOptions by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showPermitDialog by remember { mutableStateOf(false) }
+    var selectedPermit by remember { mutableStateOf<Permit?>(null) }
     val recentPermits = remember { mutableStateListOf<Permit>() }
     val authViewModel: AuthViewModel = viewModel()
+    val homeViewModel: HomeViewModel = viewModel()
+    
+    // Load permits from database when screen starts
+    val permits by homeViewModel.permits.collectAsState()
+    
+    LaunchedEffect(permits) {
+        recentPermits.clear()
+        recentPermits.addAll(permits)
+    }
+    
+    // Background dispatcher auto-starts via MainActivity - no action needed here
     
     // Single photo launcher (legacy - kept for quick single page permits)
     val cameraLauncher = rememberLauncherForActivityResult(
@@ -126,21 +145,6 @@ fun HomeScreen(
                 }
             )
         },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showBottomSheet = true },
-                containerColor = PrimaryOrange,
-                contentColor = Color.White,
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Icon(
-                    Icons.Default.CameraAlt,
-                    contentDescription = "Scan Permit"
-                )
-                Spacer(Modifier.width(8.dp))
-                Text("Scan Permit")
-            }
-        }
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -148,27 +152,158 @@ fun HomeScreen(
                 .padding(paddingValues)
                 .background(SecondaryBlue)
         ) {
-            QuickActions(
-                onScanPermit = { showBottomSheet = true },
-                onPlanRoute = {
-                    if (recentPermits.isNotEmpty()) {
-                        onNavigateToNavigation(recentPermits.first().id)
-                    }
-                },
-                onViewVault = onNavigateToVault,
-                onOpenChat = onNavigateToChat,
-                onResumeRoute = {
-                    if (recentPermits.isNotEmpty()) {
-                        onNavigateToNavigation(recentPermits.first().id)
+            // Clean, simple action cards
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Primary Action: Scan Permit
+                Card(
+                    onClick = { showBottomSheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = PrimaryOrange.copy(alpha = 0.1f)),
+                    border = BorderStroke(2.dp, PrimaryOrange),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(PrimaryOrange),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = "Scan Permit",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(20.dp))
+                        Column {
+                            Text(
+                                "Scan New Permit",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = PrimaryOrange
+                            )
+                            Text(
+                                "Add your permit photos",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
                     }
                 }
-            )
+                
+                // Text Chat with AI Dispatch
+                Card(
+                    onClick = { onNavigateToChat(null) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = PrimaryOrange.copy(alpha = 0.1f)),
+                    border = BorderStroke(2.dp, PrimaryOrange),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(PrimaryOrange),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Chat,
+                                contentDescription = "Text Chat",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(20.dp))
+                        Column {
+                            Text(
+                                "Text with AI Dispatch",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = PrimaryOrange
+                            )
+                            Text(
+                                "Get compliance help & routing",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
+                
+                // Voice Chat with AI Dispatch
+                Card(
+                    onClick = { onNavigateToVoiceChat(selectedPermit?.id) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = PrimaryOrange.copy(alpha = 0.1f)),
+                    border = BorderStroke(2.dp, PrimaryOrange),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(PrimaryOrange),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Mic,
+                                contentDescription = "Voice Chat",
+                                tint = Color.White,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(20.dp))
+                        Column {
+                            Text(
+                                "Voice with AI Dispatch",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = PrimaryOrange
+                            )
+                            Text(
+                                "Natural hands-free assistance",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+                }
+                
+                // REMOVED: Background Dispatcher box temporarily parked
+                // (Feature disabled until hotword detection is refined)
+            }
             
             Spacer(modifier = Modifier.height(16.dp))
             
             RecentPermitsSection(
                 permits = recentPermits,
-                onPermitClick = { permitId -> onNavigateToPermitReview(permitId, null) }
+                onPermitClick = { permit -> 
+                    selectedPermit = permit
+                    showPermitDialog = true
+                }
             )
         }
     }
@@ -297,99 +432,121 @@ fun HomeScreen(
                     }
                 }
                 
-                // Single photo capture (Legacy)
-                Card(
-                    onClick = {
-                        if (cameraPermissionState.status.isGranted) {
-                            val photoFile = File(
-                                context.cacheDir,
-                                "permit_${System.currentTimeMillis()}.jpg"
-                            )
-                            imageUri = FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.provider",
-                                photoFile
-                            )
-                            cameraLauncher.launch(imageUri!!)
-                        } else {
-                            cameraPermissionState.launchPermissionRequest()
-                        }
-                        showBottomSheet = false
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = SurfaceLight)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            contentDescription = "Camera",
-                            tint = PrimaryOrange,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                "Quick Photo",
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                            Text(
-                                "Single page permits only",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                }
-                
-                // Single image from gallery
-                Card(
-                    onClick = {
-                        galleryLauncher.launch("image/*")
-                        showBottomSheet = false
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = SurfaceLight)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Photo,
-                            contentDescription = "Gallery",
-                            tint = SecondaryBlue,
-                            modifier = Modifier.size(32.dp)
-                        )
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column {
-                            Text(
-                                "Choose from Gallery",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                "Select existing permit image",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextSecondary
-                            )
-                        }
-                    }
-                }
                 
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
+    }
+    
+    // Permit Selection Dialog
+    if (showPermitDialog && selectedPermit != null) {
+        AlertDialog(
+            onDismissRequest = { 
+                showPermitDialog = false 
+                selectedPermit = null
+            },
+            title = {
+                Text(
+                    "Select Action",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = SecondaryBlue
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        "Permit: ${selectedPermit!!.permitNumber}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        "State: ${selectedPermit!!.state.uppercase()}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "This permit is already validated. Choose an option:",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            },
+            confirmButton = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Action buttons
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                selectedPermit?.let { permit ->
+                                    onNavigateToNavigation(permit.id)
+                                }
+                                showPermitDialog = false
+                                selectedPermit = null
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SuccessGreen
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Navigation, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Plan Route", color = Color.White)
+                        }
+                        
+                        Button(
+                            onClick = {
+                                // Go to chat with permit context
+                                onNavigateToChat(selectedPermit?.id)
+                                showPermitDialog = false
+                                selectedPermit = null
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SecondaryBlue
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Chat", color = Color.White)
+                        }
+                    }
+                    
+                    // Complete permit button
+                    Button(
+                        onClick = {
+                            selectedPermit?.let { permit ->
+                                homeViewModel.deletePermit(permit)
+                            }
+                            showPermitDialog = false
+                            selectedPermit = null
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = ErrorRed
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Mark Complete & Remove", color = Color.White)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { 
+                        showPermitDialog = false
+                        selectedPermit = null
+                    }
+                ) {
+                    Text("Cancel", color = SecondaryBlue)
+                }
+            }
+        )
     }
     
     // Settings Dialog
@@ -410,6 +567,24 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = TextSecondary
                     )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
+                    // Cleanup button for testing
+                    Button(
+                        onClick = {
+                            homeViewModel.deleteAllTestPermits()
+                            showSettingsDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = WarningYellow
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Clear All Test Permits", color = Color.Black)
+                    }
+                    
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         "Would you like to sign out of your account?",
@@ -442,169 +617,11 @@ fun HomeScreen(
     }
 }
 
-@Composable
-fun QuickActions(
-    onScanPermit: () -> Unit,
-    onPlanRoute: () -> Unit,
-    onViewVault: () -> Unit,
-    onOpenChat: () -> Unit,
-    onResumeRoute: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                "Quick Actions",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-            
-            // First row - main actions
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                QuickActionButton(
-                    icon = Icons.Default.QrCodeScanner,
-                    label = "Scan",
-                    color = PrimaryOrange,
-                    onClick = onScanPermit
-                )
-                QuickActionButton(
-                    icon = Icons.Default.Route,
-                    label = "Route",
-                    color = SecondaryBlue,
-                    onClick = onPlanRoute
-                )
-                QuickActionButton(
-                    icon = Icons.Default.Folder,
-                    label = "Vault",
-                    color = AccentGreen,
-                    onClick = onViewVault
-                )
-            }
-            
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            // Second row - Resume Route and AI Assistant
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Resume Route button
-                Card(
-                    onClick = onResumeRoute,
-                    modifier = Modifier.weight(1f),
-                    colors = CardDefaults.cardColors(
-                        containerColor = SuccessGreen.copy(alpha = 0.1f)
-                    ),
-                    border = BorderStroke(1.dp, SuccessGreen)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Navigation,
-                            contentDescription = null,
-                            tint = SuccessGreen,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Resume Route",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = SuccessGreen,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-                
-                // AI Assistant button
-                Card(
-                    onClick = onOpenChat,
-                    modifier = Modifier.weight(1f),
-                    colors = CardDefaults.cardColors(
-                        containerColor = SecondaryBlue.copy(alpha = 0.1f)
-                    ),
-                    border = BorderStroke(1.dp, SecondaryBlue)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.Default.SmartToy,
-                            contentDescription = null,
-                            tint = SecondaryBlue,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "AI Assistant",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = SecondaryBlue,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun QuickActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    color: Color,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.clickable { onClick() }
-    ) {
-        Box(
-            modifier = Modifier
-                .size(64.dp)
-                .clip(CircleShape)
-                .background(color.copy(alpha = 0.1f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                icon,
-                contentDescription = label,
-                tint = color,
-                modifier = Modifier.size(32.dp)
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
 
 @Composable
 fun RecentPermitsSection(
     permits: List<Permit>,
-    onPermitClick: (String) -> Unit
+    onPermitClick: (Permit) -> Unit
 ) {
     Card(
         modifier = Modifier
@@ -622,9 +639,10 @@ fun RecentPermitsSection(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "Recent Permits",
+                    "Your Permits",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    color = SecondaryBlue
                 )
                 if (permits.isEmpty()) {
                     Surface(
@@ -682,7 +700,7 @@ fun RecentPermitsSection(
                     items(permits.take(5)) { permit ->
                         PermitListItem(
                             permit = permit,
-                            onClick = { onPermitClick(permit.id) }
+                            onClick = { onPermitClick(permit) }
                         )
                     }
                 }
@@ -726,20 +744,23 @@ fun PermitListItem(
                 Text(
                     permit.permitNumber,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.Bold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    color = SecondaryBlue
                 )
                 Text(
                     "Expires: ${dateFormat.format(permit.expirationDate)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary
+                    color = SecondaryBlue,
+                    fontWeight = FontWeight.Medium
                 )
                 permit.dimensions.weight?.let { weight ->
                     Text(
-                        "${weight.toInt()} lbs",
+                        "${java.text.NumberFormat.getInstance().format(weight.toInt())} lbs",
                         style = MaterialTheme.typography.bodySmall,
-                        color = TextSecondary
+                        color = SecondaryBlue,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
@@ -753,3 +774,4 @@ fun PermitListItem(
         }
     }
 }
+

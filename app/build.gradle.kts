@@ -55,11 +55,14 @@ android {
         buildConfigField("String", "HERE_API_KEY", "\"${project.findProperty("HERE_API_KEY")}\"")
         buildConfigField("String", "HERE_APP_ID", "\"${project.findProperty("HERE_APP_ID")}\"")
         
-        // Google Maps API key
-        buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"AIzaSyA02yK-n9cJIl883_5Oj97klT--SRg3en0\"")
+        // Google Maps API key from local.properties
+        buildConfigField("String", "GOOGLE_MAPS_API_KEY", "\"${localProperties.getProperty("MAPS_API_KEY") ?: ""}\"")
         
         // OpenAI API key for intelligent permit parsing (from local.properties)
         buildConfigField("String", "OPENAI_API_KEY", "\"${localProperties.getProperty("OPENAI_API_KEY") ?: ""}\"" )
+        
+        // Google Maps API Key from local.properties
+        manifestPlaceholders["MAPS_API_KEY"] = localProperties.getProperty("MAPS_API_KEY", "")
     }
 
     buildTypes {
@@ -146,6 +149,7 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.0.1")
     implementation("com.google.android.gms:play-services-maps:18.2.0")
     implementation("com.google.maps.android:maps-compose:2.15.0")
+    implementation("com.google.maps.android:android-maps-utils:3.8.2")
     
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.json:json:20230618")
@@ -161,6 +165,9 @@ dependencies {
     
     // Google Sign-In
     implementation("com.google.android.gms:play-services-auth:20.7.0")
+    
+    // WebRTC for OpenAI Realtime API voice chat
+    implementation("com.mesibo.api:webrtc:1.0.5")
     
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
